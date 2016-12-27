@@ -3,6 +3,7 @@ package lrumap_test
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/db47h/lrumap"
 )
@@ -21,6 +22,9 @@ func Example() {
 	// and fill it
 	for i := 0; i < m.Cap(); i++ {
 		m.Set(strconv.Itoa(i), i)
+		// the sleep is for testing purposes only
+		// so that we have a different timestamp for every entry
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// unknown value
