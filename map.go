@@ -141,16 +141,15 @@ func (c *LRUMap) Get(key interface{}) Value {
 //
 // This function is equivalent to:
 //
-//	var v interface
-//	var e time.time
-//	car err error
+//	var v interface{}
+//	var err error
+//	// v, err = GetWithDefault(key, defValue)
 //	t := c.Get(key)
 //	if t == nil {
 //		v, err = defValue(key)
-//		if err != nil {
-//			panic(err) // or whatever error handling code
+//		if err == nil {
+//			c.Set(key, v)
 //		}
-//		c.Set(key, v)
 //	} else {
 //		v = t.Value()
 //	}

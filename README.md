@@ -36,15 +36,17 @@ func Example() {
 	// and fill it
 	for i := 0; i < m.Cap(); i++ {
 		m.Set(strconv.Itoa(i), i)
+		// NOTE: entries added in a loop are not guaranteed ta have different timestamps
+		// especially on Windows.
 	}
 
-	// try to get some unknown value
+	// xyz does not exists, Get returns nil
 	v := m.Get("xyz")
 	if v != nil {
 		panic("found unexpected entry")
 	}
 
-	// known value ("0" will be refreshed, should push "1" on top of LRU heap)
+	// "0" exists, it will be refreshed and pushed back, "1" should now be the LRU entry)
 	v = m.Get("0")
 	if v == nil {
 		panic("entry 0 does not exist")
