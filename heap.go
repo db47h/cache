@@ -1,10 +1,9 @@
 // Copyright 2009 The Go Authors. All rights reserved.
-// Copyright 2016 Denis Bernard <db047h@gmail.com>
 //
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE.GO file.
 
-// This is a modified version of Go stdlib's heap.go.
+// This is a modified version of heap.go from the Go standard library.
 
 package lrumap
 

@@ -22,7 +22,9 @@ func Test_entryHeap(t *testing.T) {
 	for len(s) > 0 {
 		i := rand.Intn(len(s))
 		n := s[i]
-		e := entry{key: strconv.Itoa(n), value: n, ts: time.Unix(int64(n), 0)}
+		// the Key and Value type casts are for cases where the Key and Value types
+		// are specialized.
+		e := entry{key: Key(strconv.Itoa(n)), value: Value(n), ts: time.Unix(int64(n), 0)}
 		h.Push(&e)
 		s = append(s[0:i], s[i+1:]...)
 	}
@@ -31,7 +33,7 @@ func Test_entryHeap(t *testing.T) {
 	for h.Len() > 0 {
 		e := h.Pop()
 
-		if e.value.(int) != low {
+		if e.value != Value(low) {
 			t.Fatalf("Got %v, expected %d", e.value, low)
 		}
 		low++

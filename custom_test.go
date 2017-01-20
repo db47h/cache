@@ -1,31 +1,30 @@
-// do not build if using custom types
-// +build !lrumap_custom
+// +build lrumap_custom
 
-package lrumap_test
+package lrumap
 
 import (
 	"fmt"
 	"strconv"
 	"time"
-
-	"github.com/db47h/lrumap"
 )
 
-// removeCallback will be called upon entry removal from the lrumap.
-func removeCallback(v lrumap.Wrapper) {
-	fmt.Printf("Removed entry with key: %q, value: %v\n", v.Key(), v.Unwrap())
-}
+type Key string
+type Value int
 
-// A simple showcase were we store ints with string keys.
-func Example() {
+func Example_CustomType() {
+	// optional callback for removed entries
+	rmFunc := func(v Wrapper) {
+		fmt.Printf("Removed entry with key: %q, value: %v\n", v.Key(), v.Unwrap())
+	}
+
 	// make a new lru map with a maximum of 10 entries.
-	m, err := lrumap.New(10, lrumap.RemoveFunc(removeCallback))
+	m, err := New(10, RemoveFunc(rmFunc))
 	if err != nil {
 		panic(err)
 	}
 	// and fill it
 	for i := 0; i < m.Cap(); i++ {
-		m.Set(strconv.Itoa(i), i)
+		m.Set(Key(strconv.Itoa(i)), Value(i))
 		// the sleep is for testing purposes only
 		// so that we have a different timestamp for every entry
 		time.Sleep(10 * time.Millisecond)
@@ -48,19 +47,19 @@ func Example() {
 
 	// now update 2, should trigger removal of old "2"
 	m.Set("2", 222)
-	v, _ = m.GetWithDefault("2", func(key lrumap.Key) (lrumap.Value, error) {
+	v, _ = m.GetWithDefault("2", func(key Key) (Value, error) {
 		panic("here, we should not be called")
 	})
-	if v.Unwrap().(int) != 222 {
-		panic("Got " + strconv.Itoa(v.Unwrap().(int)))
+	if v.Unwrap() != 222 {
+		panic(fmt.Sprintf("Expected 222, got %v", v.Unwrap()))
 	}
 
 	// Try to get "12". Will create a new one and delete "3"
-	v, _ = m.GetWithDefault("12", func(key lrumap.Key) (lrumap.Value, error) {
+	v, _ = m.GetWithDefault("12", func(key Key) (Value, error) {
 		return 12, nil
 	})
-	if v.Unwrap().(int) != 12 {
-		panic("Expected 12, got " + strconv.Itoa(v.Unwrap().(int)))
+	if v.Unwrap() != 12 {
+		panic(fmt.Sprintf("Expected 12, got %v", v.Unwrap()))
 	}
 
 	// manually delete "5"

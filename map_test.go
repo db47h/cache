@@ -1,3 +1,5 @@
+// +build !lrumap_custom
+
 package lrumap_test
 
 import (
@@ -31,8 +33,8 @@ func TestLRUMap_Contents(t *testing.T) {
 	v := []int{0, 1, 3, 2}
 
 	for i, e := range m.Contents() {
-		if e.Value().(int) != v[i] {
-			t.Fatalf("Expected value %d, got %v", v[i], e.Value())
+		if e.Unwrap().(int) != v[i] {
+			t.Fatalf("Expected value %d, got %v", v[i], e.Unwrap())
 		}
 	}
 }
