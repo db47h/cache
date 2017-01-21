@@ -37,12 +37,13 @@ func (i *testItem) Generate(rnd *rand.Rand, size int) reflect.Value {
 
 func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
 	if c.Size() != sz {
-		t.Fatalf("%s: Wrong cache size %d, expected %d.", t.Name()+" "+name, c.Size(), sz)
+		t.Fatalf("%s: Wrong cache size %d, expected %d.", name, c.Size(), sz)
 	}
 }
 
 func Test_overCap(t *testing.T) {
 	const size = 20
+
 	c, err := lrucache.New(size)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +108,5 @@ func Test_quickSet(t *testing.T) {
 
 	// empty the cache and make sure size is 0
 	c.Prune(-1)
-	if c.Size() != 0 {
-		t.Fatalf("Wrong cache size %d, expected 0.", c.Size())
-	}
+	checkSize(t, "final check", c, 0)
 }
