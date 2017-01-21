@@ -121,3 +121,58 @@ func Test_quickSet(t *testing.T) {
 	c.Prune(-1)
 	checkSize(t, "final check", c, 0)
 }
+
+func TestLRUCache_SetCapacity(t *testing.T) {
+	c, err := lrucache.New(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Set(&testItem{1, 42, 10})
+	checkSize(t, "init", c, 10)
+
+	c.SetCapacity(10)
+	c.Prune(c.Capacity())
+	checkSize(t, "T1", c, 10)
+
+	c.SetCapacity(9)
+	c.Prune(c.Capacity())
+	if c.Capacity() != 9 {
+		t.Fatalf("Wrong capacity %d, expected 9.", c.Capacity())
+	}
+	checkSize(t, "T2", c, 0)
+}
+
+func TestLRUCache_Len(t *testing.T) {
+	seed := time.Now().UnixNano()
+	rand.Seed(seed)
+	t.Logf("Using random seed %d", seed)
+
+	items := 0
+
+	c, err := lrucache.New(100, lrucache.RemoveFunc(func(lrucache.Value) {
+		items--
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		ti := &testItem{
+			key:   rand.Intn(50),
+			value: rand.Int(),
+			size:  rand.Int63n(4),
+		}
+		if !c.Set(ti) {
+			t.Fatalf("Failed to set item %v.", ti)
+		}
+		items++
+	}
+	if c.Len() != items {
+		t.Fatalf("Wrong cache Len() %d, expected: %d.", c.Len(), items)
+	}
+
+	c.Prune(-1)
+
+	if items != 0 || c.Len() != items {
+		t.Fatalf("Wrong cache Len() %d or computed number of items %d, expected: 0.", c.Len(), items)
+	}
+}
