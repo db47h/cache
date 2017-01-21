@@ -3,6 +3,7 @@ package lrucache_test
 import (
 	"math/rand"
 	"reflect"
+	"runtime"
 	"testing"
 	"testing/quick"
 	"time"
@@ -36,8 +37,18 @@ func (i *testItem) Generate(rnd *rand.Rand, size int) reflect.Value {
 }
 
 func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
+	var rpc [2]uintptr
+	var funcName = "???"
+
+	if runtime.Callers(2, rpc[:]) == 2 {
+		if frames := runtime.CallersFrames(rpc[:]); frames != nil {
+			f, _ := frames.Next()
+			funcName = f.Function
+		}
+	}
+
 	if c.Size() != sz {
-		t.Fatalf("%s: Wrong cache size %d, expected %d.", name, c.Size(), sz)
+		t.Fatalf("%s: Wrong cache size %d, expected %d.", funcName+": "+name, c.Size(), sz)
 	}
 }
 
@@ -51,7 +62,7 @@ func Test_overCap(t *testing.T) {
 
 	c.Set(&testItem{1, 42, 10})
 	c.Set(&testItem{2, 13, 10})
-	checkSize(t, t.Name()+" init", c, size)
+	checkSize(t, "init", c, size)
 
 	// REPL1: try to replace with an item that's too big to fit
 	if c.Set(&testItem{1, 17, size + 1}) {
