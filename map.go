@@ -18,86 +18,124 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package lrumap implements a map with fixed maximum size which removes the
-// least recently used entry if an entry is added when full.
+// Package lrucache implements an LRU cache with fixed maximum size which removes the
+// least recently used item if an item is added when full.
 //
-// It supports entry removal callbacks and has an atomic Get/Set operation.
+// It supports item removal callbacks and has an atomic Get/Set operation.
 //
-// The Key and Value types are defined in types.go as interface{}. Users who
-// want to specialize these types can easily do so by vendoring the package then
-// use either of the following methods:
+// The Key and Value types are defined in types.go as interfaces. Users who need
+// to use concrete types instead of interfaces can easily customize these by
+// vendoring the package then redefine Key and Value in types.go. This file is
+// dedicated to this purpose and should not change in future versions.
 //
-// 1. Redefine Key and Value in types.go. This file is dedicated to this purpose
-// and should not change in future versions.
-//
-// 2. Create a new file inside the package with the build tag "lrumap_custom"
-// and add your custom definition of Key and Value to this file. Build your
-// project with the tag "lrumap_custom".
-//
-package lrumap
+package lrucache
 
 import (
-	"sort"
-	"time"
+	"errors"
+	"sync"
 )
 
-// Wrapper wraps the methods usable on values returned from Get()
-//
-type Wrapper interface {
-	Key() Key        // returns the entry's key
-	Unwrap() Value   // returns the entry's user value (as passed to Set)
-	Time() time.Time // returns the entry's last access time
-	idx() int        // returns index, also forces private use of the interface
+// cache full error
+var errCacheFull = errors.New("Cache full")
+
+// item wraps a cache item
+type item struct {
+	next, prev *item
+
+	v Value
 }
 
-type entry struct {
-	key   Key
-	value Value
-	index int
-	ts    time.Time
+// insert self after item at.
+func (i *item) insert(at *item) {
+	n := at.next
+	at.next = i
+	i.prev = at
+	i.next = n
+	n.prev = i
 }
 
-func (i entry) Key() Key        { return i.key }
-func (i entry) Unwrap() Value   { return i.value }
-func (i entry) Time() time.Time { return i.ts }
-func (i entry) idx() int        { return i.index }
-
-// LRUMap represents an LRU map with fixed maximum size which removes the
-// least recently used entry if an entry is added when full.
-//
-type LRUMap struct {
-	h entryHeap
-	m map[Key]*entry
-
-	remove func(Wrapper)
-	sz     int
+// unlink self from the list.
+func (i *item) unlink() {
+	i.prev.next = i.next
+	i.next.prev = i.prev
+	i.next = nil
+	i.prev = nil
 }
 
-// NewValueFunc is the prototype for user provided callbacks to create new values.
-//
-type NewValueFunc func(key Key) (value Value, err error)
+// Same list implementation as Go's stdlib.
+type itemList struct {
+	head item
+}
 
-// Option is the function prototype for functions that change LRUMap options. Can be passed to New or standalone.
-//
-type Option func(c *LRUMap) error
+func (l *itemList) sentinel() *item {
+	return &l.head
+}
 
-// RemoveFunc returns an option to set a function called on entry removal. This
-// function will be called when an entry is about to be removed from the map.
+func (l *itemList) init() {
+	l.head.prev, l.head.next = &l.head, &l.head
+}
+
+func (l *itemList) back() *item {
+	return l.head.prev
+}
+
+func (l *itemList) isValid(i *item) bool {
+	return i != &l.head
+}
+
+func (l *itemList) pushFront(i *item) {
+	i.insert(&l.head)
+}
+
+func (l *itemList) moveToFront(i *item) {
+	i.prev.next = i.next
+	i.next.prev = i.prev
+	i.insert(&l.head)
+}
+
+// LRUCache represents an LRU cache which removes the least recently used item
+// if an entry is added when full.
 //
-func RemoveFunc(f func(Wrapper)) Option {
-	return func(c *LRUMap) error {
-		c.remove = f
+type LRUCache struct {
+	sync.RWMutex
+	cap    int64 // maximum total size of the cached entries.
+	sz     int64 // current cache size
+	l      itemList
+	m      map[Key]*item
+	rmFunc func(Value)
+}
+
+// NewValueFunc is the prototype for user provided callbacks to create new cache items.
+//
+type NewValueFunc func(key Key) (item Value, err error)
+
+// Option is the function prototype for functions that set or change LRUCache
+// options. Unless otherwise indicated, Option functions can be passed to New and
+// used standalone.
+//
+type Option func(c *LRUCache) error
+
+// RemoveFunc returns an option to set a function called on item removal. This
+// function will be called when an item is about to be removed from the cache.
+//
+func RemoveFunc(f func(Value)) Option {
+	return func(c *LRUCache) error {
+		c.rmFunc = f
 		return nil
 	}
 }
 
-// New returns a new Map initialized with the given maximum size and options.
+// New returns a new LRUCache initialized with the given initial capacity and options.
 //
-func New(maxSize int, options ...Option) (*LRUMap, error) {
-	c := &LRUMap{
-		m:  make(map[Key]*entry),
-		sz: maxSize,
+func New(capacity int64, options ...Option) (*LRUCache, error) {
+	c := &LRUCache{
+		cap: capacity,
+		m:   make(map[Key]*item),
 	}
+	// initialize list
+	c.l.init()
+
+	// options
 	for _, opt := range options {
 		if err := opt(c); err != nil {
 			return nil, err
@@ -106,55 +144,88 @@ func New(maxSize int, options ...Option) (*LRUMap, error) {
 	return c, nil
 }
 
-func (c *LRUMap) addEntry(key Key, value Value) *entry {
-	e := &entry{
-		key:   key,
-		value: value,
-		ts:    time.Now(),
+// remove removes item i and returns its predecessor.
+func (c *LRUCache) remove(i *item) *item {
+	v := i.v
+	i.v = nil // prevent memory leaks
+	prev := i.prev
+	i.unlink()
+	delete(c.m, v.Key())
+	c.sz -= v.Size()
+	if c.rmFunc != nil {
+		c.rmFunc(v)
 	}
-	c.h.Push(e)
-	c.m[key] = e
-	for c.sz > 0 && len(c.h) > c.sz {
-		t := c.h.Pop()
-		delete(c.m, t.key)
-		if c.remove != nil {
-			c.remove(t)
-		}
-	}
-	return e
+	return prev
 }
 
-func (c *LRUMap) updateTTL(e *entry) {
-	e.ts = time.Now()
-	c.h.Fix(e.index)
-}
-
-// Set sets the given key/value pair. If a map entry with the same key already exists and
-// a Remove function has been set, the Remove function will be called on the removed entry.
+// Prune removes oldest items from the cache until the cache size is less than
+// or equal sizeMax. This can be used to implement soft/hard limits via a service
+// goroutine.
 //
-func (c *LRUMap) Set(key Key, value Value) {
-	e, ok := c.m[key]
-	if !ok {
-		c.addEntry(key, value)
-		return
+func (c *LRUCache) Prune(sizeMax int64) {
+	for i := c.l.back(); c.sz > sizeMax && c.l.isValid(i); i = c.remove(i) {
 	}
-	// replace
-	if c.remove != nil {
-		c.remove(e)
+}
+
+// reserve prunes enough items to make room for an item of size sz. Returns true if there is enough room after pruning.
+//
+func (c *LRUCache) reserve(sz int64, sentinel *item) bool {
+	target := c.cap - sz
+	if c.sz <= target {
+		return true
 	}
-	e.value = value
-	c.updateTTL(e)
+	for i := c.l.back(); c.sz > target && i != sentinel; i = c.remove(i) {
+	}
+	// check again
+	return c.sz+sz <= c.cap
+}
+
+func (c *LRUCache) addValue(v Value) error {
+	sz := v.Size()
+	if !c.reserve(sz, c.l.sentinel()) {
+		return errCacheFull
+	}
+	i := &item{v: v}
+	c.m[v.Key()] = i
+	c.sz += sz
+	c.l.pushFront(i)
+	return nil
+}
+
+// Set writes the given item into the cache. If a cache item with the same key already exists and
+// a Remove function has been set, the Remove function will be called on the removed item.
+//
+func (c *LRUCache) Set(v Value) bool {
+	i := c.m[v.Key()]
+	if i == nil {
+		// no previous item
+		return c.addValue(v) == nil
+	}
+
+	// replace old
+	// promote the item first, then use it as sentinel for reserve.
+	c.l.moveToFront(i)
+	sz := v.Size() - i.v.Size()
+	if !c.reserve(sz, i) {
+		return false
+	}
+	if c.rmFunc != nil {
+		c.rmFunc(i.v)
+	}
+	i.v = v
+	c.sz += sz
+	return true
 }
 
 // Get returns the value associated with the given key or nil if not found.
 //
-func (c *LRUMap) Get(key Key) Wrapper {
-	e := c.m[key]
-	if e == nil {
+func (c *LRUCache) Get(key Key) Value {
+	i := c.m[key]
+	if i == nil {
 		return nil
 	}
-	c.updateTTL(e)
-	return e
+	c.l.moveToFront(i)
+	return i.v
 }
 
 // GetWithDefault returns the value associated with the given key. If no value
@@ -179,59 +250,47 @@ func (c *LRUMap) Get(key Key) Wrapper {
 //
 // but with much less overhead.
 //
-func (c *LRUMap) GetWithDefault(key Key, defValue NewValueFunc) (Wrapper, error) {
-	e := c.m[key]
-	if e != nil {
-		c.updateTTL(e)
-		return e, nil
+func (c *LRUCache) GetWithDefault(key Key, defValue NewValueFunc) (Value, error) {
+	i := c.m[key]
+	if i != nil {
+		c.l.moveToFront(i)
+		return i.v, nil
 	}
 	v, err := defValue(key)
 	if err != nil {
 		return nil, err
 	}
-	e = c.addEntry(key, v)
-	return e, nil
+	return v, c.addValue(v)
 }
 
-// Delete deletes the map entry for the given key.
+// Remove removes the given key from the cache and returns it. If no such item
+// is found, Remove returns nil.
 //
-func (c *LRUMap) Delete(key Key) bool {
-	var ok bool
-	if e := c.m[key]; e != nil {
-		delete(c.m, key)
-		c.h.Remove(e.idx())
-		if c.remove != nil {
-			c.remove(e)
-		}
-		ok = true
+func (c *LRUCache) Remove(key Key) Value {
+	i := c.m[key]
+	if i == nil {
+		return nil
 	}
-	return ok
+	rv := i.v
+	c.remove(i)
+	return rv
 }
 
-// Len returns the number of entries in the map.
+// Len returns the number of items in the cache.
 //
-func (c *LRUMap) Len() int { return len(c.m) }
+func (c *LRUCache) Len() int { return len(c.m) }
 
-// Cap returns the maximum capacity of the map.
+// Size returns the total size of the items present in the cache.
 //
-func (c *LRUMap) Cap() int { return c.sz }
+func (c *LRUCache) Size() int64 { return c.sz }
 
-// values is a sortable []Value.
+// Capacity returns the cache capacity.
 //
-type values []Wrapper
+func (c *LRUCache) Capacity() int64 { return c.cap }
 
-func (e values) Len() int           { return len(e) }
-func (e values) Less(i, j int) bool { return e[i].Time().Before(e[j].Time()) }
-func (e values) Swap(i, j int)      { e[i], e[j] = e[j], e[i] }
-
-// Contents returns the map contents as a ordered slice. This function is mostly intended for
-// debugging purposes as it may take a significant amount of time to complete.
+// SetCapacity sets the cache capacity. There is no automatic pruning of cache entries
+// if the new capacity is less than the current cache size.
 //
-func (c *LRUMap) Contents() []Wrapper {
-	t := make(values, len(c.h))
-	for i, v := range c.h {
-		t[i] = v
-	}
-	sort.Sort(t)
-	return t
+func (c *LRUCache) SetCapacity(cap int64) {
+	c.cap = cap
 }

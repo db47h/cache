@@ -1,40 +1,113 @@
-// +build !lrumap_custom
-
-package lrumap_test
+package lrucache_test
 
 import (
-	"strconv"
+	"math/rand"
+	"reflect"
 	"testing"
+	"testing/quick"
 	"time"
 
-	"github.com/db47h/lrumap"
+	"github.com/db47h/lrucache"
 )
 
-func TestLRUMap_Contents(t *testing.T) {
-	m, err := lrumap.New(4)
+const keyRange = 20
+
+type testItem struct {
+	key   int
+	value int
+	size  int64
+}
+
+func (i *testItem) Size() int64 {
+	return i.size
+}
+
+func (i *testItem) Key() lrucache.Key {
+	return lrucache.Key(i.key)
+}
+
+func (i *testItem) Generate(rnd *rand.Rand, size int) reflect.Value {
+	i = &testItem{
+		key:   rnd.Intn(keyRange),
+		value: rnd.Int(),
+		size:  rnd.Int63n(keyRange),
+	}
+	return reflect.ValueOf(i)
+}
+
+func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
+	if c.Size() != sz {
+		t.Fatalf("%s: Wrong cache size %d, expected %d.", t.Name()+" "+name, c.Size(), sz)
+	}
+}
+
+func Test_overCap(t *testing.T) {
+	const size = 20
+	c, err := lrucache.New(size)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
-	for i := 0; i < m.Cap(); i++ {
-		m.Set(strconv.Itoa(i), i)
-		time.Sleep(10 * time.Millisecond)
+	c.Set(&testItem{1, 42, 10})
+	c.Set(&testItem{2, 13, 10})
+	checkSize(t, t.Name()+" init", c, size)
+
+	// REPL1: try to replace with an item that's too big to fit
+	if c.Set(&testItem{1, 17, size + 1}) {
+		t.Fatal("Replace w/ large item unexpected success.")
+	}
+	checkSize(t, "REPL1", c, 10)
+	if i := c.Get(1); i == nil || i.(*testItem).value != 42 {
+		t.Fatalf("Bad iten %v", i)
 	}
 
-	if m.Len() != 4 {
-		t.Fatalf("m.Len() = %d != 4", m.Len())
+	// REPL2: now try to replace with something that will purge all items
+	if !c.Set(&testItem{1, 56, 15}) {
+		t.Fatalf("replace all with single large item failed")
 	}
+	checkSize(t, "REPL2", c, 15)
 
-	// push back "2"
-	if m.Get("2") == nil {
-		t.Fatal("Entry \"2\" not found")
+	// INS1: insert an item too large to fit
+	if c.Set(&testItem{4, 17, size + 1}) {
+		t.Fatal("Insert large item unexpected success.")
 	}
+	checkSize(t, "INS1", c, 0)
+}
 
-	v := []int{0, 1, 3, 2}
+func Test_quickSet(t *testing.T) {
+	seed := time.Now().UnixNano()
+	rand.Seed(seed)
+	t.Logf("Using random seed %d", seed)
 
-	for i, e := range m.Contents() {
-		if e.Unwrap().(int) != v[i] {
-			t.Fatalf("Expected value %d, got %v", v[i], e.Unwrap())
+	c, err := lrucache.New(keyRange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := func(ti *testItem) bool {
+		var i lrucache.Value = ti
+		ok := c.Set(i)
+		if !ok {
+			t.Log("Set returned false.")
+			return false
 		}
+		i = c.Get(ti.key)
+		if i == nil || i.(*testItem).value != ti.value {
+			t.Log("Get != Set.")
+			return false
+		}
+		return true
+	}
+	if err = quick.Check(f, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Size() > c.Capacity() {
+		t.Fatalf("Cache size %d over capacity %d.", c.Size(), c.Capacity())
+	}
+
+	// empty the cache and make sure size is 0
+	c.Prune(-1)
+	if c.Size() != 0 {
+		t.Fatalf("Wrong cache size %d, expected 0.", c.Size())
 	}
 }

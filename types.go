@@ -17,14 +17,14 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
-// +build !lrumap_custom
 
-package lrumap
+package lrucache
 
-// Key is the key type.
-//
+// Key is the type of cache keys.
 type Key interface{}
 
-// Value is the value type.
-//
-type Value interface{}
+// Value wraps the methods for values that can be cached.
+type Value interface {
+	Key() Key
+	Size() int64
+}
