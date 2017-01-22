@@ -69,7 +69,7 @@ func Test_overCap(t *testing.T) {
 		t.Fatal("Replace w/ large item unexpected success.")
 	}
 	checkSize(t, "REPL1", c, 10)
-	if i := c.Get(1); i == nil || i.(*testItem).value != 42 {
+	if i, _ := c.Get(1); i == nil || i.(*testItem).value != 42 {
 		t.Fatalf("Bad iten %v", i)
 	}
 
@@ -102,7 +102,7 @@ func Test_quickSet(t *testing.T) {
 			t.Log("Set returned false.")
 			return false
 		}
-		i = c.Get(ti.key)
+		i, _ = c.Get(ti.key)
 		if i == nil || i.(*testItem).value != ti.value {
 			t.Log("Get != Set.")
 			return false
@@ -118,7 +118,7 @@ func Test_quickSet(t *testing.T) {
 	}
 
 	// empty the cache and make sure size is 0
-	c.Prune(-1)
+	c.EvictToSize(-1)
 	checkSize(t, "final check", c, 0)
 }
 
@@ -131,11 +131,11 @@ func TestLRUCache_SetCapacity(t *testing.T) {
 	checkSize(t, "init", c, 10)
 
 	c.SetCapacity(10)
-	c.Prune(c.Capacity())
+	c.EvictToSize(c.Capacity())
 	checkSize(t, "T1", c, 10)
 
 	c.SetCapacity(9)
-	c.Prune(c.Capacity())
+	c.EvictToSize(c.Capacity())
 	if c.Capacity() != 9 {
 		t.Fatalf("Wrong capacity %d, expected 9.", c.Capacity())
 	}
@@ -149,7 +149,7 @@ func TestLRUCache_Len(t *testing.T) {
 
 	items := 0
 
-	c, err := lrucache.New(100, lrucache.RemoveFunc(func(lrucache.Value) {
+	c, err := lrucache.New(100, lrucache.EvictHandler(func(lrucache.Value) {
 		items--
 	}))
 	if err != nil {
@@ -170,7 +170,7 @@ func TestLRUCache_Len(t *testing.T) {
 		t.Fatalf("Wrong cache Len() %d, expected: %d.", c.Len(), items)
 	}
 
-	c.Prune(-1)
+	c.EvictToSize(-1)
 
 	if items != 0 || c.Len() != items {
 		t.Fatalf("Wrong cache Len() %d or computed number of items %d, expected: 0.", c.Len(), items)

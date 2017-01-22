@@ -2,10 +2,23 @@
 
 [![Build Status][ci-img]][ci] [![Go Report Card][lint-img]][lint] [![Coverage Status][cover-img]][cover] [![GoDoc][godoc-img]][godoc]
 
-Package lrucache implements a LRU cache with fixed maximum size which removes the
-least recently used entry if an entry is added when full.
+Package lrucache implements an LRU cache with optional automatic item eviction.
 
-It supports entry removal callbacks and has an atomic Get/Set operation ([GetWithDefault]).
+It also supports item creation and removal callbacks, enabling a pattern like
+
+```go
+    v, _ = cache.Get(key)
+    if v == nil {
+        cache.Set(newValueForKey(key))
+    }
+```
+
+ to work as an atomic cache operation via a single Get() call.
+
+The Key and Value types are defined in types.go as interfaces. Users who need
+to use concrete types instead of interfaces can easily customize these by
+vendoring the package then redefine Key and Value in types.go. This file is
+dedicated to this purpose and should not change in future versions.
 
 ## Installation
 
@@ -13,18 +26,13 @@ It supports entry removal callbacks and has an atomic Get/Set operation ([GetWit
 go get -u github.com/db47h/lrucache
 ```
 
-## Usage
+## Usage & examples.
 
 Read the [API docs][godoc].
 
-Some sample code:
-
-TODO
-
-
 ## Concurrent use
 
-TODO
+TODO (not built-in, users need to provide their own locking).
 
 ## Specializing the Key and Value types
 
