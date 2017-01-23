@@ -35,8 +35,6 @@ A quick example demonstrating how to implement hard/soft limits:
 ```go
 // Using EvictToSize to implement hard/soft limit.
 func ExampleLRUCache_EvictToSize() {
-	// lock for concurrent cache access.
-	var l sync.Mutex
 	// Create a cache with a hard limit of 1GB. This is our hard limit. The
 	// configured eviction handler is just here for debugging purposes.
 	c, _ := lrucache.New(1<<30, lrucache.EvictHandler(
@@ -49,20 +47,16 @@ func ExampleLRUCache_EvictToSize() {
 	t := time.NewTicker(time.Millisecond * 50)
 	go func() {
 		for _ = range t.C {
-			l.Lock()
 			c.EvictToSize(512 << 20)
-			l.Unlock()
 		}
 	}()
 
 	// do stuff..
-	l.Lock()
 	c.Set(&testItem{key: 13, size: 600 << 20})
 	// Now adding item "42" with a size of 600MB will overflow the hard limit of
 	// 1GB. As a consequence, item "13" will be evicted synchronously with the
 	// call to Set.
 	c.Set(&testItem{key: 42, size: 600 << 20})
-	l.Unlock()
 
 	// Give time for the background job to kick in.
 	fmt.Println("Asynchronous evictions:")

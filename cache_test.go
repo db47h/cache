@@ -1,11 +1,11 @@
 package lrucache_test
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
 	"runtime"
-	"sync"
 	"testing"
 	"testing/quick"
 	"time"
@@ -179,10 +179,52 @@ func TestLRUCache_Len(t *testing.T) {
 	}
 }
 
+// test various code paths in Get
+func TestLRUCache_Get(t *testing.T) {
+	c, _ := lrucache.New(20)
+
+	v, err := c.Get(17)
+	if v != nil || err != nil {
+		t.Fatalf("Got %v, %v for cache miss.", v, err)
+	}
+
+	var ti = &testItem{42, 1234, 150} // too large on purpose
+	// setup newvalue handler
+	_ = lrucache.NewValueHandler(func(k lrucache.Key) (lrucache.Value, error) {
+		if k.(int) != 42 {
+			return nil, errors.New("WRONG ANSWER")
+		}
+		return ti, nil
+	})(c)
+
+	// get a generated value (failure)
+	v, err = c.Get(44)
+	if v != nil || err == nil {
+		t.Fatalf("Got %v, %v for cache miss.", v, err)
+	}
+
+	var evictHandlerCalled = false
+	// setup eviction handler
+	_ = lrucache.EvictHandler(func(v lrucache.Value) {
+		evictHandlerCalled = true
+		if v.(*testItem) != ti {
+			t.Fatalf("%v != %v", v.(*testItem), ti)
+		}
+	})(c)
+
+	// get a generated value (failure 2)
+	v, err = c.Get(42)
+	if v != nil || err == nil {
+		t.Fatalf("Got %v, %v for cache miss.", v, err)
+	}
+
+	if !evictHandlerCalled {
+		t.Fatal("EvcitHandler not called.")
+	}
+}
+
 // Using EvictToSize to implement hard/soft limit.
 func ExampleLRUCache_EvictToSize() {
-	// lock for concurrent cache access.
-	var l sync.Mutex
 	// Create a cache with a hard limit of 1GB. This is our hard limit. The
 	// configured eviction handler is just here for debugging purposes.
 	c, _ := lrucache.New(1<<30, lrucache.EvictHandler(
@@ -195,20 +237,16 @@ func ExampleLRUCache_EvictToSize() {
 	t := time.NewTicker(time.Millisecond * 50)
 	go func() {
 		for _ = range t.C {
-			l.Lock()
 			c.EvictToSize(512 << 20)
-			l.Unlock()
 		}
 	}()
 
 	// do stuff..
-	l.Lock()
 	c.Set(&testItem{key: 13, size: 600 << 20})
 	// Now adding item "42" with a size of 600MB will overflow the hard limit of
 	// 1GB. As a consequence, item "13" will be evicted synchronously with the
 	// call to Set.
 	c.Set(&testItem{key: 42, size: 600 << 20})
-	l.Unlock()
 
 	// Give time for the background job to kick in.
 	fmt.Println("Asynchronous evictions:")
@@ -221,6 +259,30 @@ func ExampleLRUCache_EvictToSize() {
 	// Evict item 13
 	// Asynchronous evictions:
 	// Evict item 42
+}
+
+func TestLRUCache_Evict(t *testing.T) {
+	c, _ := lrucache.New(20)
+	it := &testItem{42, 1212, 7}
+	c.Set(it)
+	checkSize(t, "start", c, 7)
+	if c.Len() != 1 {
+		t.Fatalf("Wrong cache len %d, expected 1", c.Len())
+	}
+	v := c.Evict(12)
+	if v != nil {
+		t.Fatalf("Evict(12) returned non nil value %v.", v)
+	}
+
+	v = c.Evict(42)
+	if v == nil || v.(*testItem) != it {
+		t.Fatalf("Got %v, expected %v", v, it)
+	}
+
+	checkSize(t, "end", c, 0)
+	if c.Len() != 0 {
+		t.Fatalf("Wrong cache len %d, expected 0", c.Len())
+	}
 }
 
 var benchSeed int64 = 42
