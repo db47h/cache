@@ -2,7 +2,7 @@
 
 [![Build Status][ci-img]][ci] [![Go Report Card][lint-img]][lint] [![Coverage Status][cover-img]][cover] [![GoDoc][godoc-img]][godoc]
 
-Package lrucache implements an LRU cache with optional automatic item eviction.
+Package lrucache implements an LRU cache with optional automatic item eviction and safe for concurrent use.
 
 It also supports item creation and removal callbacks, enabling a pattern like
 
@@ -30,9 +30,60 @@ go get -u github.com/db47h/lrucache
 
 Read the [API docs][godoc].
 
+A quick example demonstrating how to implement hard/soft limits:
+
+```go
+// Using EvictToSize to implement hard/soft limit.
+func ExampleLRUCache_EvictToSize() {
+	// lock for concurrent cache access.
+	var l sync.Mutex
+	// Create a cache with a hard limit of 1GB. This is our hard limit. The
+	// configured eviction handler is just here for debugging purposes.
+	c, _ := lrucache.New(1<<30, lrucache.EvictHandler(
+		func(v lrucache.Value) {
+			fmt.Printf("Evict item %v\n", v.Key())
+		}))
+
+	// start a goroutine that will periodically evict cache items to keep the
+	// cache size under 512MB. This is our soft limit.
+	t := time.NewTicker(time.Millisecond * 50)
+	go func() {
+		for _ = range t.C {
+			l.Lock()
+			c.EvictToSize(512 << 20)
+			l.Unlock()
+		}
+	}()
+
+	// do stuff..
+	l.Lock()
+	c.Set(&testItem{key: 13, size: 600 << 20})
+	// Now adding item "42" with a size of 600MB will overflow the hard limit of
+	// 1GB. As a consequence, item "13" will be evicted synchronously with the
+	// call to Set.
+	c.Set(&testItem{key: 42, size: 600 << 20})
+	l.Unlock()
+
+	// Give time for the background job to kick in.
+	fmt.Println("Asynchronous evictions:")
+	time.Sleep(60 * time.Millisecond)
+
+	t.Stop()
+
+	// Output:
+	//
+	// Evict item 13
+	// Asynchronous evictions:
+	// Evict item 42
+}
+```
+
 ## Concurrent use
 
-TODO (not built-in, users need to provide their own locking).
+The package has built-in support for concurrent use. Callers must be aware that
+when handlers configured with NewValueHandler and EvictHandler are called, the
+cache may be in a locked state. Therefore such handlers must not make any direct
+or indirect calls to the cache.
 
 ## Specializing the Key and Value types
 

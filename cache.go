@@ -29,6 +29,11 @@
 //
 //	to work as an atomic cache operation via a single Get() call.
 //
+// The package has built-in support for concurrent use. Callers must be aware that
+// when handlers configured with NewValueHandler and EvictHandler are called, the
+// cache may be in a locked state. Therefore such handlers must not make any direct
+// or indirect calls to the cache.
+//
 // The Key and Value types are defined in types.go as interfaces. Users who need
 // to use concrete types instead of interfaces can easily customize these by
 // vendoring the package then redefine Key and Value in types.go. This file is
@@ -36,7 +41,10 @@
 //
 package lrucache
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // NoCap can be used in New to create a cache with unlimited capacity.
 const NoCap = int64(^uint64(0) >> 1)
@@ -48,10 +56,11 @@ var errCacheFull = errors.New("Cache full")
 // if an entry is added when full.
 //
 type LRUCache struct {
+	m            sync.Mutex
 	cap          int64 // maximum total size of the cached entries.
 	sz           int64 // current cache size
-	l            itemList
-	m            map[Key]*item
+	list         itemList
+	imap         map[Key]*item
 	evictHandler func(Value)
 	newHandler   func(Key) (Value, error)
 }
@@ -67,7 +76,9 @@ type Option func(c *LRUCache) error
 //
 func EvictHandler(f func(v Value)) Option {
 	return func(c *LRUCache) error {
+		c.m.Lock()
 		c.evictHandler = f
+		c.m.Unlock()
 		return nil
 	}
 }
@@ -82,7 +93,9 @@ func EvictHandler(f func(v Value)) Option {
 //
 func NewValueHandler(f func(k Key) (Value, error)) Option {
 	return func(c *LRUCache) error {
+		c.m.Lock()
 		c.newHandler = f
+		c.m.Unlock()
 		return nil
 	}
 }
@@ -91,11 +104,11 @@ func NewValueHandler(f func(k Key) (Value, error)) Option {
 //
 func New(capacity int64, options ...Option) (*LRUCache, error) {
 	c := &LRUCache{
-		cap: capacity,
-		m:   make(map[Key]*item),
+		cap:  capacity,
+		imap: make(map[Key]*item),
 	}
 	// initialize list
-	c.l.init()
+	c.list.init()
 
 	// options
 	for _, opt := range options {
@@ -114,12 +127,12 @@ func (c *LRUCache) callEvictHandler(v Value) {
 
 func (c *LRUCache) fill(v Value) error {
 	sz := v.Size()
-	if !c.reserve(sz, c.l.sentinel()) {
+	if !c.reserve(sz, c.list.sentinel()) {
 		return errCacheFull
 	}
 	i := newItem(v)
-	c.l.pushFront(i)
-	c.m[v.Key()] = i
+	c.list.pushFront(i)
+	c.imap[v.Key()] = i
 	c.sz += sz
 	return nil
 }
@@ -131,7 +144,7 @@ func (c *LRUCache) evict(i *item) *item {
 
 	i.remove()
 
-	delete(c.m, v.Key())
+	delete(c.imap, v.Key())
 	c.sz -= v.Size()
 	c.callEvictHandler(v)
 	return prev
@@ -145,7 +158,7 @@ func (c *LRUCache) reserve(sz int64, sentinel *item) bool {
 	if c.sz <= target {
 		return true
 	}
-	for i := c.l.back(); c.sz > target && i != sentinel; i = c.evict(i) {
+	for i := c.list.back(); c.sz > target && i != sentinel; i = c.evict(i) {
 	}
 	// check again
 	return c.sz+sz <= c.cap
@@ -155,22 +168,28 @@ func (c *LRUCache) reserve(sz int64, sentinel *item) bool {
 // a Remove function has been set, the Remove function will be called on the removed item.
 //
 func (c *LRUCache) Set(v Value) bool {
-	i := c.m[v.Key()]
+	c.m.Lock()
+
+	i := c.imap[v.Key()]
 	if i == nil {
 		// no previous item
-		return c.fill(v) == nil
+		err := c.fill(v)
+		c.m.Unlock()
+		return err == nil
 	}
 
 	// replace old
-	// promote the item first, then use it as sentinel for reserve.
-	c.l.moveToFront(i)
+	// promote the item first, then use it as sentinel for reserve().
+	c.list.moveToFront(i)
 	sz := v.Size() - i.v.Size()
 	if !c.reserve(sz, i) {
+		c.m.Unlock()
 		return false
 	}
 	c.callEvictHandler(i.v)
 	i.v = v
 	c.sz += sz
+	c.m.Unlock()
 	return true
 }
 
@@ -182,36 +201,48 @@ func (c *LRUCache) Set(v Value) bool {
 // then return a nil value with a non-nil error.
 //
 func (c *LRUCache) Get(key Key) (Value, error) {
-	i := c.m[key]
+	c.m.Lock()
+
+	i := c.imap[key]
 	if i != nil {
-		c.l.moveToFront(i)
-		return i.v, nil
+		c.list.moveToFront(i)
+		v := i.v
+		c.m.Unlock()
+		return v, nil
 	}
+	// not found
 	if c.newHandler == nil {
+		c.m.Unlock()
 		return nil, nil
 	}
+	// new handler configured. Get new value and fill cache with it.
 	v, err := c.newHandler(key)
 	if err != nil {
+		c.m.Unlock()
 		return v, err
 	}
 	err = c.fill(v)
 	if err != nil {
 		c.callEvictHandler(v)
-		return nil, err
+		v = nil
 	}
-	return v, nil
+	c.m.Unlock()
+	return v, err
 }
 
 // Evict evicts the item with the given key from the cache and returns it. If
 // no such item is found, Evict returns nil.
 //
 func (c *LRUCache) Evict(key Key) Value {
-	i := c.m[key]
+	c.m.Lock()
+	i := c.imap[key]
 	if i == nil {
+		c.m.Unlock()
 		return nil
 	}
 	rv := i.v
 	c.evict(i)
+	c.m.Unlock()
 	return rv
 }
 
@@ -220,25 +251,44 @@ func (c *LRUCache) Evict(key Key) Value {
 // eviction or soft/hard limits via a service goroutine.
 //
 func (c *LRUCache) EvictToSize(size int64) {
-	for i := c.l.back(); c.sz > size && i != c.l.sentinel(); i = c.evict(i) {
+	c.m.Lock()
+	for i := c.list.back(); c.sz > size && i != c.list.sentinel(); i = c.evict(i) {
 	}
+	c.m.Unlock()
 }
 
 // Len returns the number of items in the cache.
 //
-func (c *LRUCache) Len() int { return len(c.m) }
+func (c *LRUCache) Len() int {
+	c.m.Lock()
+	l := len(c.imap)
+	c.m.Unlock()
+	return l
+}
 
 // Size returns the total size of the items present in the cache.
 //
-func (c *LRUCache) Size() int64 { return c.sz }
+func (c *LRUCache) Size() int64 {
+	c.m.Lock()
+	sz := c.sz
+	c.m.Unlock()
+	return sz
+}
 
 // Capacity returns the cache capacity.
 //
-func (c *LRUCache) Capacity() int64 { return c.cap }
+func (c *LRUCache) Capacity() int64 {
+	c.m.Lock()
+	sz := c.cap
+	c.m.Unlock()
+	return sz
+}
 
 // SetCapacity sets the cache capacity. There is no automatic pruning of cache entries
 // if the new capacity is less than the current cache size.
 //
 func (c *LRUCache) SetCapacity(cap int64) {
+	c.m.Lock()
 	c.cap = cap
+	c.m.Unlock()
 }

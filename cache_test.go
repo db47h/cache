@@ -1,9 +1,11 @@
 package lrucache_test
 
 import (
+	"fmt"
 	"math/rand"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"testing/quick"
 	"time"
@@ -174,5 +176,73 @@ func TestLRUCache_Len(t *testing.T) {
 
 	if items != 0 || c.Len() != items {
 		t.Fatalf("Wrong cache Len() %d or computed number of items %d, expected: 0.", c.Len(), items)
+	}
+}
+
+// Using EvictToSize to implement hard/soft limit.
+func ExampleLRUCache_EvictToSize() {
+	// lock for concurrent cache access.
+	var l sync.Mutex
+	// Create a cache with a hard limit of 1GB. This is our hard limit. The
+	// configured eviction handler is just here for debugging purposes.
+	c, _ := lrucache.New(1<<30, lrucache.EvictHandler(
+		func(v lrucache.Value) {
+			fmt.Printf("Evict item %v\n", v.Key())
+		}))
+
+	// start a goroutine that will periodically evict cache items to keep the
+	// cache size under 512MB. This is our soft limit.
+	t := time.NewTicker(time.Millisecond * 50)
+	go func() {
+		for _ = range t.C {
+			l.Lock()
+			c.EvictToSize(512 << 20)
+			l.Unlock()
+		}
+	}()
+
+	// do stuff..
+	l.Lock()
+	c.Set(&testItem{key: 13, size: 600 << 20})
+	// Now adding item "42" with a size of 600MB will overflow the hard limit of
+	// 1GB. As a consequence, item "13" will be evicted synchronously with the
+	// call to Set.
+	c.Set(&testItem{key: 42, size: 600 << 20})
+	l.Unlock()
+
+	// Give time for the background job to kick in.
+	fmt.Println("Asynchronous evictions:")
+	time.Sleep(60 * time.Millisecond)
+
+	t.Stop()
+
+	// Output:
+	//
+	// Evict item 13
+	// Asynchronous evictions:
+	// Evict item 42
+}
+
+var benchSeed int64 = 42
+
+func Benchmark_set_small_key_range(b *testing.B) {
+	rand.Seed(benchSeed)
+	c, _ := lrucache.New(keyRange * 5)
+	i := &testItem{key: rand.Intn(keyRange), value: rand.Int(), size: rand.Int63n(keyRange)}
+
+	for n := 0; n < b.N; n++ {
+		c.Set(i)
+		i.key = (i.key + 1) % keyRange
+	}
+}
+
+func Benchmark_set_large_key_range(b *testing.B) {
+	rand.Seed(benchSeed)
+	c, _ := lrucache.New(keyRange * 5)
+	i := &testItem{key: rand.Intn(keyRange), value: rand.Int(), size: rand.Int63n(keyRange)}
+
+	for n := 0; n < b.N; n++ {
+		c.Set(i)
+		i.key++
 	}
 }

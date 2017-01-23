@@ -32,7 +32,7 @@ var lastFd = -1 // dummy, predictable simulation of the next file descriptor
 func newHandler(k lrucache.Key) (lrucache.Value, error) {
 	fmt.Printf("NewHandler for key %s\n", k)
 	lastFd++
-	return &cachedFile{k.(string), lastFd, rand.Int63n(64 << 10)}, nil
+	return &cachedFile{k.(string), lastFd, rand.Int63n(1 << 10)}, nil
 }
 
 // evictHandler will be called upon item eviction from the cache.
@@ -42,7 +42,7 @@ func evictHandler(v lrucache.Value) {
 }
 
 // A file cache example.
-func Example() {
+func Example_1() {
 	// create a small cache with a 100MB capacity.
 	cache, err := lrucache.New(100<<20,
 		lrucache.EvictHandler(evictHandler),
@@ -76,12 +76,12 @@ func Example() {
 
 	// Add a few files more (fileC will be evicted)
 	fmt.Println("More files")
-	cache.Get("/nfs/fileX")
-	cache.Get("/nfs/fileY")
-	cache.Get("/nfs/fileZ")
+	_, _ = cache.Get("/nfs/fileX")
+	_, _ = cache.Get("/nfs/fileY")
+	_, _ = cache.Get("/nfs/fileZ")
 
 	// redresh fileX
-	cache.Get("/nfs/fileX")
+	_, _ = cache.Get("/nfs/fileX")
 
 	// force a cache flush. fileX was used last, so it should be evicted last.
 	fmt.Println("Flush")
