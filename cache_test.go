@@ -296,21 +296,36 @@ var benchSeed int64 = 42
 func Benchmark_set_small_key_range(b *testing.B) {
 	rand.Seed(benchSeed)
 	c, _ := lrucache.New(keyRange * 5)
-	i := &testItem{key: rand.Intn(keyRange), value: rand.Int(), size: rand.Int63n(keyRange)}
+	key := 0
 
 	for n := 0; n < b.N; n++ {
+		i := &testItem{key: key, value: 0, size: rand.Int63n(keyRange * 5)}
 		c.Set(i)
-		i.key = (i.key + 1) % keyRange
+		key = (key + 1) % keyRange
 	}
 }
 
 func Benchmark_set_large_key_range(b *testing.B) {
 	rand.Seed(benchSeed)
 	c, _ := lrucache.New(keyRange * 5)
-	i := &testItem{key: rand.Intn(keyRange), value: rand.Int(), size: rand.Int63n(keyRange)}
+	key := 0
+
+	for n := 0; n < b.N; n++ {
+		// previous version of the benchmark used fixed size items resulting in
+		// single items evictions and poorer performance.
+		i := &testItem{key: key, value: 0, size: rand.Int63n(keyRange * 5)}
+		c.Set(i)
+		key++
+	}
+}
+
+func Benchmark_set_replace(b *testing.B) {
+	c, _ := lrucache.New(10)
+	i := &testItem{key: 0, value: 0, size: 1}
+
+	b.ReportAllocs()
 
 	for n := 0; n < b.N; n++ {
 		c.Set(i)
-		i.key++
 	}
 }

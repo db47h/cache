@@ -23,7 +23,8 @@ package lrucache
 // Key is the type of cache keys.
 type Key interface{}
 
-// Value wraps the methods for values that can be cached.
+// Value wraps the methods for values that can be cached. Key() and Size() must
+// always return the same value throughout the lifetime of a stored item.
 type Value interface {
 	Key() Key
 	Size() int64

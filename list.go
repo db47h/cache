@@ -57,8 +57,9 @@ func (i *item) unlink() {
 	i.prev = nil
 }
 
-// remove self.
-func (i *item) remove() {
+// discard removes the item from its list, deletes all references to other objects
+// and pushes it back to the free list.
+func (i *item) discard() {
 	i.unlink()
 	i.v = nil
 	pool.Put(i)

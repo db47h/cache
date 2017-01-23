@@ -130,6 +130,8 @@ func (c *LRUCache) insert(i, after *item, sz int64) {
 	c.sz += sz
 }
 
+// Fill cache with value v
+//
 func (c *LRUCache) fill(v Value) error {
 	sz := v.Size()
 	if !c.reserve(sz) {
@@ -146,7 +148,7 @@ func (c *LRUCache) fill(v Value) error {
 func (c *LRUCache) evict(i *item) *item {
 	v, prev := i.v, i.prev
 
-	i.remove()
+	i.discard()
 
 	delete(c.imap, v.Key())
 	c.sz -= v.Size()
@@ -168,8 +170,7 @@ func (c *LRUCache) reserve(sz int64) bool {
 	}
 	for i := c.list.back(); c.sz > target && i != c.list.sentinel(); i = c.evict(i) {
 	}
-	// check again
-	return c.sz+sz <= c.cap
+	return true // (c.sz+sz <= c.cap) MUST be true here
 }
 
 // Set writes the given item into the cache. If a cache item with the same key already exists and
@@ -233,12 +234,12 @@ func (c *LRUCache) Get(key Key) (Value, error) {
 		return v, err
 	}
 	err = c.fill(v)
+	c.m.Unlock()
 	if err != nil {
 		c.callEvictHandler(v)
-		v = nil
+		return nil, err
 	}
-	c.m.Unlock()
-	return v, err
+	return v, nil
 }
 
 // Evict evicts the item with the given key from the cache and returns it. If
