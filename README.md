@@ -26,7 +26,7 @@ dedicated to this purpose and should not change in future versions.
 go get -u github.com/db47h/lrucache
 ```
 
-## Usage & examples.
+## Usage & examples
 
 Read the [API docs][godoc].
 
@@ -85,6 +85,15 @@ The Key and Value types are defined in [types.go] as interfaces. Users who need 
 use concrete types instead of interfaces can easily customize these by vendoring
 the package then redefine Key and Value in types.go. This file is dedicated to
 this purpose and should not change in future versions.
+
+## TODO
+
+Make cache evictions asynchronous:
+
+- reserve and evict to size will slice the item list and pass the sliced-off
+  chain to a GC goroutine.
+- add a Close method on LRUCache to stop the GC goroutine and enable clean cache
+  shutdowns.
 
 [ci]: https://travis-ci.org/db47h/lrucache
 [ci-img]: https://travis-ci.org/db47h/lrucache.svg?branch=master

@@ -125,15 +125,19 @@ func (c *LRUCache) callEvictHandler(v Value) {
 	}
 }
 
+func (c *LRUCache) insert(i, after *item, sz int64) {
+	i.insert(after)
+	c.sz += sz
+}
+
 func (c *LRUCache) fill(v Value) error {
 	sz := v.Size()
-	if !c.reserve(sz, c.list.sentinel()) {
+	if !c.reserve(sz) {
 		return errCacheFull
 	}
 	i := newItem(v)
-	c.list.pushFront(i)
 	c.imap[v.Key()] = i
-	c.sz += sz
+	c.insert(i, c.list.sentinel(), sz)
 	return nil
 }
 
@@ -153,12 +157,16 @@ func (c *LRUCache) evict(i *item) *item {
 // reserve evicts enough items to make room for an item of size sz. Returns true
 // if there is enough room after eviction.
 //
-func (c *LRUCache) reserve(sz int64, sentinel *item) bool {
+func (c *LRUCache) reserve(sz int64) bool {
 	target := c.cap - sz
 	if c.sz <= target {
 		return true
 	}
-	for i := c.list.back(); c.sz > target && i != sentinel; i = c.evict(i) {
+	// won't fit, don't even try
+	if target < 0 {
+		return false
+	}
+	for i := c.list.back(); c.sz > target && i != c.list.sentinel(); i = c.evict(i) {
 	}
 	// check again
 	return c.sz+sz <= c.cap
@@ -179,17 +187,20 @@ func (c *LRUCache) Set(v Value) bool {
 	}
 
 	// replace old
-	// promote the item first, then use it as sentinel for reserve().
-	c.list.moveToFront(i)
-	sz := v.Size() - i.v.Size()
-	if !c.reserve(sz, i) {
+	prev := i.prev // keep track of current position
+	i.unlink()
+	c.sz -= i.v.Size()
+	sz := v.Size()
+	if !c.reserve(sz) {
+		// put it back
+		c.insert(i, prev, i.v.Size())
 		c.m.Unlock()
 		return false
 	}
-	c.callEvictHandler(i.v)
-	i.v = v
-	c.sz += sz
+	v, i.v = i.v, v
+	c.insert(i, c.list.sentinel(), sz)
 	c.m.Unlock()
+	c.callEvictHandler(v)
 	return true
 }
 

@@ -49,12 +49,17 @@ func (i *item) insert(after *item) {
 	n.prev = i
 }
 
-// remove self from the list.
-func (i *item) remove() {
+// unlink item from the list.
+func (i *item) unlink() {
 	i.prev.next = i.next
 	i.next.prev = i.prev
 	i.next = nil // prevent memory leaks
 	i.prev = nil
+}
+
+// remove self.
+func (i *item) remove() {
+	i.unlink()
 	i.v = nil
 	pool.Put(i)
 }
@@ -75,10 +80,6 @@ func (l *itemList) init() {
 
 func (l *itemList) back() *item {
 	return l.head.prev
-}
-
-func (l *itemList) pushFront(i *item) {
-	i.insert(&l.head)
 }
 
 func (l *itemList) moveToFront(i *item) {

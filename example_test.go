@@ -72,7 +72,9 @@ func Example_1() {
 
 	// Add some huge file that will automatically evict file B to make room for it.
 	fmt.Println("Auto-eviction")
-	cache.Set(&cachedFile{"/nfs/fileC", 1234, 100 << 20})
+	if !cache.Set(&cachedFile{"/nfs/fileC", 1234, 100 << 20}) {
+		panic("fileC should fit!")
+	}
 
 	// Add a few files more (fileC will be evicted)
 	fmt.Println("More files")

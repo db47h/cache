@@ -50,7 +50,7 @@ func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
 	}
 
 	if c.Size() != sz {
-		t.Fatalf("%s: Wrong cache size %d, expected %d.", funcName+": "+name, c.Size(), sz)
+		t.Fatalf("%s: Wrong cache size %d, expected %d. Cache len: %d", funcName+": "+name, c.Size(), sz, c.Len())
 	}
 }
 
@@ -70,7 +70,7 @@ func Test_overCap(t *testing.T) {
 	if c.Set(&testItem{1, 17, size + 1}) {
 		t.Fatal("Replace w/ large item unexpected success.")
 	}
-	checkSize(t, "REPL1", c, 10)
+	checkSize(t, "REPL1", c, 20)
 	if i, _ := c.Get(1); i == nil || i.(*testItem).value != 42 {
 		t.Fatalf("Bad iten %v", i)
 	}
@@ -81,11 +81,17 @@ func Test_overCap(t *testing.T) {
 	}
 	checkSize(t, "REPL2", c, 15)
 
-	// INS1: insert an item too large to fit
-	if c.Set(&testItem{4, 17, size + 1}) {
+	// INSx: insert/replace an item too large to fit
+	c.Set(&testItem{2, 18, 1})
+	if c.Set(&testItem{4, 17, size + 1}) { // new key
 		t.Fatal("Insert large item unexpected success.")
 	}
-	checkSize(t, "INS1", c, 0)
+	checkSize(t, "INS1", c, 16)
+
+	if c.Set(&testItem{1, 19, size + 1}) { // replace
+		t.Fatal("Insert large item unexpected success.")
+	}
+	checkSize(t, "INS2", c, 16)
 }
 
 func Test_quickSet(t *testing.T) {
