@@ -114,7 +114,7 @@ this purpose and should not change in future versions.
 [lint-img]: https://goreportcard.com/badge/github.com/db47h/cache
 [cover]: https://coveralls.io/github/db47h/cache
 [cover-img]: https://coveralls.io/repos/github/db47h/cache/badge.svg
-[godoc]: https://godoc.org/github.com/db47h/cache
+[godoc]: https://godoc.org/github.com/db47h/cache/lru
 [godoc-img]: https://godoc.org/github.com/db47h/cache?status.svg
 
 [types.go]: https://github.com/db47h/cache/blob/master/lru/types.go
