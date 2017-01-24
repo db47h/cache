@@ -235,15 +235,17 @@ func TestCache_Get(t *testing.T) {
 
 // Using EvictToSize to implement hard/soft limit.
 func ExampleCache_EvictToSize() {
-	// Create a cache with a hard limit of 1GB. This is our hard limit. The
-	// configured eviction handler is just here for debugging purposes.
+	// Create a cache with a capacity of 1GB. This will be our hard limit. When
+	// the cache size will reach it, evictions will happen synchronously with
+	// Set()/Get().
 	c, _ := lru.New(1<<30, lru.EvictHandler(
+		// This eviction handler is just here for debugging purposes.
 		func(v lru.Value) {
 			fmt.Printf("Evicted item %v\n", v)
 		}))
 
-	// start a goroutine that will periodically evict cache items to keep the
-	// cache size under 512MB. This is our soft limit.
+	// start a goroutine that will periodically evict items from the cache to
+	// keep the cache size under 512MB. This is our soft limit.
 	var wg sync.WaitGroup
 	var done = make(chan struct{})
 	wg.Add(1)
