@@ -40,7 +40,7 @@ func cacheSet(c *lru.Cache, f *cachedFile) bool {
 }
 
 // A file cache example.
-func Example_1() {
+func Example_file_cache() {
 	// create a small cache with a 100MB capacity.
 	cache, err := lru.New(100<<20,
 		lru.EvictHandler(evictHandler),
