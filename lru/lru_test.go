@@ -307,7 +307,10 @@ func TestCache_Evict(t *testing.T) {
 }
 
 func TestCache_EvictLRU(t *testing.T) {
-	c, _ := lru.New(20)
+	evictions := 0
+	c, _ := lru.New(20, lru.EvictHandler(func(v lru.Value) {
+		evictions++
+	}))
 	c.Set(0, 42, 2)
 	c.Set(1, 1, 4)
 	v, ok := c.EvictLRU(false)
@@ -317,7 +320,25 @@ func TestCache_EvictLRU(t *testing.T) {
 	if v.(int) != 42 {
 		t.Fatalf("EvictLRU returned %v, expected %v.", v, 42)
 	}
-	checkSize(t, "END", c, 4)
+	checkSize(t, "step1", c, 4)
+
+	v, ok = c.EvictLRU(true)
+	if !ok {
+		t.Fatal("EvictLRU failed")
+	}
+	if v.(int) != 1 {
+		t.Fatalf("EvictLRU returned %v, expected %v.", v, 1)
+	}
+	checkSize(t, "step2", c, 0)
+
+	v, ok = c.EvictLRU(false)
+	if v != nil || ok {
+		t.Fatalf("EvictLRU returned %v, %v, expected %v, %v.", v, ok, nil, false)
+	}
+
+	if evictions != 1 {
+		t.Fatalf("EvictLRU: got %v evictions, expected %v", evictions, 1)
+	}
 }
 
 var benchSeed int64 = 42
