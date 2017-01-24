@@ -1,10 +1,10 @@
-package lrucache_test
+package lru_test
 
 import (
 	"fmt"
 	"math/rand"
 
-	"github.com/db47h/lrucache"
+	"github.com/db47h/cache/lru"
 )
 
 // We're caching files
@@ -14,14 +14,6 @@ type cachedFile struct {
 	size int64
 }
 
-func (f *cachedFile) Key() lrucache.Key {
-	return f.name
-}
-
-func (f *cachedFile) Size() int64 {
-	return f.size
-}
-
 var lastFd = -1 // dummy, predictable simulation of the next file descriptor
 
 // newHandler will be called to atomically create new items on cache misses.
@@ -29,24 +21,30 @@ var lastFd = -1 // dummy, predictable simulation of the next file descriptor
 // scenario the fd would be an *os.File or an io.Reader, not some dummy fd. The
 // file would even be fetched asynchronously since this function should return
 // as quickly as possible.
-func newHandler(k lrucache.Key) (lrucache.Value, error) {
+func newHandler(k lru.Key) (lru.Value, int64, error) {
 	fmt.Printf("NewHandler for key %s\n", k)
 	lastFd++
-	return &cachedFile{k.(string), lastFd, rand.Int63n(1 << 10)}, nil
+	sz := rand.Int63n(1 << 10)
+	return &cachedFile{k.(string), lastFd, sz}, sz, nil
 }
 
 // evictHandler will be called upon item eviction from the cache.
-func evictHandler(v lrucache.Value) {
-	fmt.Printf("Evicted file: %q, fd: %v\n", v.Key(), v.(*cachedFile).fd)
+func evictHandler(v lru.Value) {
+	f := v.(*cachedFile)
+	fmt.Printf("Evicted file: %q, fd: %v\n", f.name, f.fd)
 	// here we'd delete the file from disk
+}
+
+func cacheSet(c *lru.Cache, f *cachedFile) bool {
+	return c.Set(f.name, f, f.size)
 }
 
 // A file cache example.
 func Example_1() {
 	// create a small cache with a 100MB capacity.
-	cache, err := lrucache.New(100<<20,
-		lrucache.EvictHandler(evictHandler),
-		lrucache.NewValueHandler(newHandler))
+	cache, err := lru.New(100<<20,
+		lru.EvictHandler(evictHandler),
+		lru.NewValueHandler(newHandler))
 	if err != nil {
 		panic(err)
 	}
@@ -61,7 +59,7 @@ func Example_1() {
 	fmt.Printf("Got file %s, fd: %d\n", f.name, f.fd)
 
 	// manually setting an item
-	cache.Set(&cachedFile{"/nfs/fileB", 4242, 16 << 20})
+	cacheSet(cache, &cachedFile{"/nfs/fileB", 4242, 16 << 20})
 	v, _ = cache.Get("/nfs/fileB")
 	f = v.(*cachedFile)
 	fmt.Printf("Got file %s, fd: %d\n", f.name, f.fd)
@@ -72,7 +70,7 @@ func Example_1() {
 
 	// Add some huge file that will automatically evict file B to make room for it.
 	fmt.Println("Auto-eviction")
-	if !cache.Set(&cachedFile{"/nfs/fileC", 1234, 100 << 20}) {
+	if !cacheSet(cache, &cachedFile{"/nfs/fileC", 1234, 100 << 20}) {
 		panic("fileC should fit!")
 	}
 

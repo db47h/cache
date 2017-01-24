@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package lrucache
+package lru
 
 import "sync"
 
@@ -26,7 +26,9 @@ import "sync"
 type item struct {
 	next, prev *item
 
+	k Key
 	v Value
+	s int64
 }
 
 // item pool
@@ -34,10 +36,21 @@ var pool = sync.Pool{
 	New: func() interface{} { return new(item) },
 }
 
-func newItem(v Value) *item {
+func newItem(k Key, v Value, s int64) *item {
 	i := pool.Get().(*item)
+	i.k = k
 	i.v = v
+	i.s = s
 	return i
+}
+
+// freeItem deletes all references to contained objects and pushes it back onto
+// the free list. The item must be unlinked beforehand.
+func freeItem(i *item) {
+	i.k = nil
+	i.v = nil
+	i.s = 0
+	pool.Put(i)
 }
 
 // insert self after the specified item.
@@ -49,20 +62,11 @@ func (i *item) insert(after *item) {
 	n.prev = i
 }
 
-// unlink item from the list.
-func (i *item) unlink() {
+func (i *item) remove() {
 	i.prev.next = i.next
 	i.next.prev = i.prev
 	i.next = nil // prevent memory leaks
 	i.prev = nil
-}
-
-// discard removes the item from its list, deletes all references to other objects
-// and pushes it back to the free list.
-func (i *item) discard() {
-	i.unlink()
-	i.v = nil
-	pool.Put(i)
 }
 
 // Same list implementation as Go's stdlib: implemented as a ring and head is

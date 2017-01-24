@@ -18,14 +18,10 @@
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-package lrucache
+package lru
 
-// Key is the type of cache keys.
+// A Key may be any value that is comparable. See http://golang.org/ref/spec#Comparison_operators.
 type Key interface{}
 
-// Value wraps the methods for values that can be cached. Key() and Size() must
-// always return the same value throughout the lifetime of a stored item.
-type Value interface {
-	Key() Key
-	Size() int64
-}
+// Value is the value of a cache item.
+type Value interface{}

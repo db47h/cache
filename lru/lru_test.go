@@ -1,4 +1,4 @@
-package lrucache_test
+package lru_test
 
 import (
 	"errors"
@@ -6,11 +6,12 @@ import (
 	"math/rand"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"testing/quick"
 	"time"
 
-	"github.com/db47h/lrucache"
+	"github.com/db47h/cache/lru"
 )
 
 const keyRange = 20
@@ -25,8 +26,8 @@ func (i *testItem) Size() int64 {
 	return i.size
 }
 
-func (i *testItem) Key() lrucache.Key {
-	return lrucache.Key(i.key)
+func (i *testItem) Key() lru.Key {
+	return lru.Key(i.key)
 }
 
 func (i *testItem) Generate(rnd *rand.Rand, size int) reflect.Value {
@@ -38,7 +39,7 @@ func (i *testItem) Generate(rnd *rand.Rand, size int) reflect.Value {
 	return reflect.ValueOf(i)
 }
 
-func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
+func checkSize(t *testing.T, name string, c *lru.Cache, sz int64) {
 	var rpc [2]uintptr
 	var funcName = "???"
 
@@ -54,20 +55,24 @@ func checkSize(t *testing.T, name string, c *lrucache.LRUCache, sz int64) {
 	}
 }
 
+func set(c *lru.Cache, i *testItem) bool {
+	return c.Set(i.key, i, i.size)
+}
+
 func Test_overCap(t *testing.T) {
 	const size = 20
 
-	c, err := lrucache.New(size)
+	c, err := lru.New(size)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	c.Set(&testItem{1, 42, 10})
-	c.Set(&testItem{2, 13, 10})
+	set(c, &testItem{1, 42, 10})
+	set(c, &testItem{2, 13, 10})
 	checkSize(t, "init", c, size)
 
 	// REPL1: try to replace with an item that's too big to fit
-	if c.Set(&testItem{1, 17, size + 1}) {
+	if set(c, &testItem{1, 17, size + 1}) {
 		t.Fatal("Replace w/ large item unexpected success.")
 	}
 	checkSize(t, "REPL1", c, 20)
@@ -76,19 +81,19 @@ func Test_overCap(t *testing.T) {
 	}
 
 	// REPL2: now try to replace with something that will purge all items
-	if !c.Set(&testItem{1, 56, 15}) {
+	if !set(c, &testItem{1, 56, 15}) {
 		t.Fatalf("replace all with single large item failed")
 	}
 	checkSize(t, "REPL2", c, 15)
 
 	// INSx: insert/replace an item too large to fit
-	c.Set(&testItem{2, 18, 1})
-	if c.Set(&testItem{4, 17, size + 1}) { // new key
+	set(c, &testItem{2, 18, 1})
+	if set(c, &testItem{4, 17, size + 1}) { // new key
 		t.Fatal("Insert large item unexpected success.")
 	}
 	checkSize(t, "INS1", c, 16)
 
-	if c.Set(&testItem{1, 19, size + 1}) { // replace
+	if set(c, &testItem{1, 19, size + 1}) { // replace
 		t.Fatal("Insert large item unexpected success.")
 	}
 	checkSize(t, "INS2", c, 16)
@@ -99,18 +104,17 @@ func Test_quickSet(t *testing.T) {
 	rand.Seed(seed)
 	t.Logf("Using random seed %d", seed)
 
-	c, err := lrucache.New(keyRange)
+	c, err := lru.New(keyRange)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := func(ti *testItem) bool {
-		var i lrucache.Value = ti
-		ok := c.Set(i)
+		ok := set(c, ti)
 		if !ok {
 			t.Log("Set returned false.")
 			return false
 		}
-		i, _ = c.Get(ti.key)
+		i, _ := c.Get(ti.key)
 		if i == nil || i.(*testItem).value != ti.value {
 			t.Log("Get != Set.")
 			return false
@@ -130,12 +134,12 @@ func Test_quickSet(t *testing.T) {
 	checkSize(t, "final check", c, 0)
 }
 
-func TestLRUCache_SetCapacity(t *testing.T) {
-	c, err := lrucache.New(20)
+func TestCache_SetCapacity(t *testing.T) {
+	c, err := lru.New(20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Set(&testItem{1, 42, 10})
+	set(c, &testItem{1, 42, 10})
 	checkSize(t, "init", c, 10)
 
 	c.SetCapacity(10)
@@ -150,14 +154,14 @@ func TestLRUCache_SetCapacity(t *testing.T) {
 	checkSize(t, "T2", c, 0)
 }
 
-func TestLRUCache_Len(t *testing.T) {
+func TestCache_Len(t *testing.T) {
 	seed := time.Now().UnixNano()
 	rand.Seed(seed)
 	t.Logf("Using random seed %d", seed)
 
 	items := 0
 
-	c, err := lrucache.New(100, lrucache.EvictHandler(func(lrucache.Value) {
+	c, err := lru.New(100, lru.EvictHandler(func(lru.Value) {
 		items--
 	}))
 	if err != nil {
@@ -169,7 +173,7 @@ func TestLRUCache_Len(t *testing.T) {
 			value: rand.Int(),
 			size:  rand.Int63n(4),
 		}
-		if !c.Set(ti) {
+		if !set(c, ti) {
 			t.Fatalf("Failed to set item %v.", ti)
 		}
 		items++
@@ -186,8 +190,8 @@ func TestLRUCache_Len(t *testing.T) {
 }
 
 // test various code paths in Get
-func TestLRUCache_Get(t *testing.T) {
-	c, _ := lrucache.New(20)
+func TestCache_Get(t *testing.T) {
+	c, _ := lru.New(20)
 
 	v, err := c.Get(17)
 	if v != nil || err != nil {
@@ -196,11 +200,11 @@ func TestLRUCache_Get(t *testing.T) {
 
 	var ti = &testItem{42, 1234, 150} // too large on purpose
 	// setup newvalue handler
-	_ = lrucache.NewValueHandler(func(k lrucache.Key) (lrucache.Value, error) {
+	lru.NewValueHandler(func(k lru.Key) (lru.Value, int64, error) {
 		if k.(int) != 42 {
-			return nil, errors.New("WRONG ANSWER")
+			return nil, 0, errors.New("WRONG ANSWER")
 		}
-		return ti, nil
+		return ti, ti.size, nil
 	})(c)
 
 	// get a generated value (failure)
@@ -211,7 +215,7 @@ func TestLRUCache_Get(t *testing.T) {
 
 	var evictHandlerCalled = false
 	// setup eviction handler
-	_ = lrucache.EvictHandler(func(v lrucache.Value) {
+	_ = lru.EvictHandler(func(v lru.Value) {
 		evictHandlerCalled = true
 		if v.(*testItem) != ti {
 			t.Fatalf("%v != %v", v.(*testItem), ti)
@@ -230,47 +234,58 @@ func TestLRUCache_Get(t *testing.T) {
 }
 
 // Using EvictToSize to implement hard/soft limit.
-func ExampleLRUCache_EvictToSize() {
+func ExampleCache_EvictToSize() {
 	// Create a cache with a hard limit of 1GB. This is our hard limit. The
 	// configured eviction handler is just here for debugging purposes.
-	c, _ := lrucache.New(1<<30, lrucache.EvictHandler(
-		func(v lrucache.Value) {
-			fmt.Printf("Evict item %v\n", v.Key())
+	c, _ := lru.New(1<<30, lru.EvictHandler(
+		func(v lru.Value) {
+			fmt.Printf("Evicted item %v\n", v)
 		}))
 
 	// start a goroutine that will periodically evict cache items to keep the
 	// cache size under 512MB. This is our soft limit.
-	t := time.NewTicker(time.Millisecond * 50)
-	go func() {
-		for _ = range t.C {
-			c.EvictToSize(512 << 20)
+	var wg sync.WaitGroup
+	var done = make(chan struct{})
+	wg.Add(1)
+	go func(wg *sync.WaitGroup, done <-chan struct{}) {
+		defer wg.Done()
+		t := time.NewTicker(time.Millisecond * 20)
+		for {
+			select {
+			case <-t.C:
+				c.EvictToSize(512 << 20)
+			case <-done:
+				t.Stop()
+				return
+			}
 		}
-	}()
+	}(&wg, done)
 
 	// do stuff..
-	c.Set(&testItem{key: 13, size: 600 << 20})
+	c.Set(13, "Value for key 13", 600<<20)
 	// Now adding item "42" with a size of 600MB will overflow the hard limit of
 	// 1GB. As a consequence, item "13" will be evicted synchronously with the
 	// call to Set.
-	c.Set(&testItem{key: 42, size: 600 << 20})
+	c.Set(42, "Value for key 42", 600<<20)
 
 	// Give time for the background job to kick in.
 	fmt.Println("Asynchronous evictions:")
 	time.Sleep(60 * time.Millisecond)
 
-	t.Stop()
+	close(done)
+	wg.Wait()
 
 	// Output:
 	//
-	// Evict item 13
+	// Evicted item Value for key 13
 	// Asynchronous evictions:
-	// Evict item 42
+	// Evicted item Value for key 42
 }
 
-func TestLRUCache_Evict(t *testing.T) {
-	c, _ := lrucache.New(20)
+func TestCache_Evict(t *testing.T) {
+	c, _ := lru.New(20)
 	it := &testItem{42, 1212, 7}
-	c.Set(it)
+	set(c, it)
 	checkSize(t, "start", c, 7)
 	if c.Len() != 1 {
 		t.Fatalf("Wrong cache len %d, expected 1", c.Len())
@@ -291,41 +306,66 @@ func TestLRUCache_Evict(t *testing.T) {
 	}
 }
 
+func TestCache_EvictLRU(t *testing.T) {
+	c, _ := lru.New(20)
+	c.Set(0, 42, 2)
+	c.Set(1, 1, 4)
+	v, ok := c.EvictLRU(false)
+	if !ok {
+		t.Fatal("EvictLRU failed")
+	}
+	if v.(int) != 42 {
+		t.Fatalf("EvictLRU returned %v, expected %v.", v, 42)
+	}
+	checkSize(t, "END", c, 4)
+}
+
 var benchSeed int64 = 42
 
 func Benchmark_set_small_key_range(b *testing.B) {
 	rand.Seed(benchSeed)
-	c, _ := lrucache.New(keyRange * 5)
+	c, _ := lru.New(keyRange * 5)
 	key := 0
 
 	for n := 0; n < b.N; n++ {
 		i := &testItem{key: key, value: 0, size: rand.Int63n(keyRange * 5)}
-		c.Set(i)
+		set(c, i)
 		key = (key + 1) % keyRange
 	}
 }
 
 func Benchmark_set_large_key_range(b *testing.B) {
 	rand.Seed(benchSeed)
-	c, _ := lrucache.New(keyRange * 5)
+	c, _ := lru.New(keyRange * 5)
 	key := 0
 
 	for n := 0; n < b.N; n++ {
 		// previous version of the benchmark used fixed size items resulting in
 		// single items evictions and poorer performance.
 		i := &testItem{key: key, value: 0, size: rand.Int63n(keyRange * 5)}
-		c.Set(i)
+		set(c, i)
 		key++
 	}
 }
 
 func Benchmark_set_replace(b *testing.B) {
-	c, _ := lrucache.New(10)
-	i := &testItem{key: 0, value: 0, size: 1}
+	c, _ := lru.New(10)
 
+	k, v := 0, 0
 	b.ReportAllocs()
 
 	for n := 0; n < b.N; n++ {
-		c.Set(i)
+		c.Set(k, &v, 1)
+	}
+}
+
+func Benchmark_get(b *testing.B) {
+	c, _ := lru.New(10)
+
+	c.Set(0, 0, 1)
+	b.ReportAllocs()
+
+	for n := 0; n < b.N; n++ {
+		_, _ = c.Get(0)
 	}
 }
