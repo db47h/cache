@@ -18,334 +18,264 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Package lru implements an LRU cache with variable item size and automatic
-// item eviction.
-//
-// For performance reasons, the lru list is kept in a custom list
-// implementation, it does not use Go's container/list.
-//
-// The cache size is determined by the actual size of the contained items, or
-// more precisely by the size specified in the call to Set() for each new item.
-// The Cache.Size() and Cache.Len() methods return distinct quantities.
-//
-// The default cache eviction policy is cache size vs. capacity. Users who need
-// to count items can set the size of each item to 1, in which case Len() ==
-// Size(). If a balance between item count and size is desired, another option
-// is to set the cache capacity to NoCap and use a custom eviction function. See
-// the example for EvictToSize().
-//
-// Item creation and removal callback handlers are also supported. The item
-// creation handler enables a pattern like
-//
-//	value, err = cache.Get(key)
-//	if value == nil {
-//		// no value found, make one
-//		v, size, _ := newValueForKey(key)
-//		cache.Set(key, v, size)
-//		value = v
-//	}
-//
-// to work as an atomic cache operation via a single Get() call.
-//
-// The package has built-in support for concurrent use. Callers must be aware
-// that when handlers configured with NewValueHandler and EvictHandler are
-// called, the cache may be in a locked state. Therefore such handlers must not
-// make any direct or indirect calls to the cache.
-//
-// The Key and Value types are defined in types.go as interfaces. Users who need
-// to use concrete types instead of interfaces can easily customize these by
-// vendoring the package then redefine Key and Value in types.go. This file is
-// dedicated to this purpose and should not change in future versions.
-//
+// Package lru provides a generic LRU hashmap for use as the core of a LRU cache.
+// Size and eviction policy are controlled by client code via an OnEvict() callback
+// called whenever a new item is inserted into the cache.
 package lru
 
-import (
-	"errors"
-	"sync"
-)
+// LRU represents a Least Recent Used hash table.
+type LRU[K comparable, V any] struct {
+	hash    func(K) uint64
+	onEvict func(K, V) bool
 
-// NoCap can be used as the size argument in New to create a cache with
-// unlimited capacity.
-const NoCap = int64(^uint64(0) >> 1)
-
-// cache full error
-var errCacheFull = errors.New("Cache full")
-
-// Cache represents an LRU cache which removes the least recently used items
-// when the cache size has reached its maximum capacity and new items are added
-// (or replaced by larger ones).
-//
-type Cache struct {
-	m            sync.Mutex
-	cap          int64 // maximum total size of the cached entries.
-	sz           int64 // current cache size
-	list         itemList
-	imap         map[Key]*item
-	evictHandler func(Value)
-	newHandler   func(Key) (Value, int64, error)
+	items []item[K, V]
+	count int
+	mask  int
 }
 
-// Option is the function prototype for functions that set or change Cache
-// options. Unless otherwise indicated, Option functions can be passed to New
-// and used standalone.
-//
-type Option func(c *Cache) error
-
-// EvictHandler returns an option to setconfigure a function that will be called
-// for items as they are evicted from the cache.
-//
-func EvictHandler(f func(v Value)) Option {
-	return func(c *Cache) error {
-		c.m.Lock()
-		c.evictHandler = f
-		c.m.Unlock()
-		return nil
-	}
+type item[K comparable, V any] struct {
+	key   K
+	value V
+	prev  int
+	next  int
+	set   bool
 }
 
-// NewValueHandler returns an option to configure a handler that will be called
-// to automatically generate new values on cache misses. i.e. when calling Get()
-// and no value is found, this handler will be called to generate a new value
-// and size for the requested key, add it to the cache, then return that value.
-//
-// The purpose of this handler is to enable atomic cache fills in a concurrent
-// context.
-//
-func NewValueHandler(f func(k Key) (value Value, size int64, err error)) Option {
-	return func(c *Cache) error {
-		c.m.Lock()
-		c.newHandler = f
-		c.m.Unlock()
-		return nil
+func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
+	l := &LRU[K, V]{
+		// minimal table size: head/tail node + 3 items + 1 free cell
+		// this is to keep the growth check happy for up to 3 items
+		items:   make([]item[K, V], 5),
+		mask:    3,
+		hash:    hash,
+		onEvict: onEvict,
 	}
-}
-
-// New returns a new Cache initialized with the given initial capacity and
-// options.
-//
-func New(capacity int64, options ...Option) (*Cache, error) {
-	c := &Cache{
-		cap:  capacity,
-		imap: make(map[Key]*item),
-	}
-	// initialize list
-	c.list.init()
-
-	// options
-	for _, opt := range options {
-		if err := opt(c); err != nil {
-			return nil, err
-		}
-	}
-	return c, nil
-}
-
-func (c *Cache) callEvictHandler(v Value) {
-	if c.evictHandler != nil {
-		c.evictHandler(v)
-	}
-}
-
-func (c *Cache) insert(i, after *item) {
-	i.insert(after)
-	c.sz += i.s
-}
-
-func (c *Cache) remove(i *item) {
-	i.remove()
-	c.sz -= i.s
-}
-
-// Fill cache with value v
-//
-func (c *Cache) fill(k Key, v Value, s int64) error {
-	if !c.reserve(s) {
-		return errCacheFull
-	}
-	i := newItem(k, v, s)
-	c.imap[k] = i
-	c.insert(i, c.list.sentinel())
-	return nil
-}
-
-// evict evicts item i and returns the next item to be evicted.
-//
-func (c *Cache) evict(i *item) *item {
-	v, prev := i.v, i.prev
-	delete(c.imap, i.k)
-	c.remove(i)
-	freeItem(i)
-	c.callEvictHandler(v)
-	return prev
-}
-
-// reserve evicts enough items to make room for an item of size sz. Returns true
-// if there is enough room after eviction.
-//
-func (c *Cache) reserve(sz int64) bool {
-	target := c.cap - sz
-	if c.sz <= target {
-		return true
-	}
-	// won't fit, don't even try
-	if target < 0 {
-		return false
-	}
-	for i := c.list.back(); c.sz > target && i != c.list.sentinel(); i = c.evict(i) {
-	}
-	return true // (c.sz+sz <= c.cap) MUST be true here
-}
-
-// Set associates the given key/value pair. If a cache item with the same key
-// already exists and an EvictHandler has been configured, the handler will be
-// called on the removed item. The size argument specifies the item size.
-//
-func (c *Cache) Set(key Key, value Value, size int64) bool {
-	c.m.Lock()
-
-	i := c.imap[key]
-	if i == nil {
-		// no previous item
-		err := c.fill(key, value, size)
-		c.m.Unlock()
-		return err == nil
-	}
-
-	// replace old
-	prev := i.prev // keep track of current position
-	c.remove(i)
-	if !c.reserve(size) {
-		// put it back
-		c.insert(i, prev)
-		c.m.Unlock()
-		return false
-	}
-	value, i.v = i.v, value
-	i.s = size
-	c.insert(i, c.list.sentinel())
-	c.m.Unlock()
-	c.callEvictHandler(value)
-	return true
-}
-
-// Get returns the value associated with the given key. If the key is not found
-// it will return nil and a nil error, or, if a NewValueHandler has been
-// configured, it will call the handler to generate a new value then try to add it
-// to the cache and return the new value. If Get failed to add the value to the
-// cache, it will call the configured EvictHandler for the newly created value,
-// then return a nil value with a non-nil error.
-//
-func (c *Cache) Get(key Key) (Value, error) {
-	c.m.Lock()
-
-	i := c.imap[key]
-	if i != nil {
-		c.list.moveToFront(i)
-		v := i.v
-		c.m.Unlock()
-		return v, nil
-	}
-	// not found
-	if c.newHandler == nil {
-		c.m.Unlock()
-		return nil, nil
-	}
-	// new handler configured. Get new value and fill cache with it.
-	v, s, err := c.newHandler(key)
-	if err != nil {
-		c.m.Unlock()
-		return v, err
-	}
-	err = c.fill(key, v, s)
-	c.m.Unlock()
-	if err != nil {
-		c.callEvictHandler(v)
-		return nil, err
-	}
-	return v, nil
-}
-
-// Evict evicts the item with the given key from the cache and returns it. If
-// no such item is found, Evict returns nil.
-//
-func (c *Cache) Evict(key Key) Value {
-	c.m.Lock()
-	i := c.imap[key]
-	if i == nil {
-		c.m.Unlock()
-		return nil
-	}
-	rv := i.v
-	c.evict(i)
-	c.m.Unlock()
-	return rv
-}
-
-// EvictToSize removes the least recently used items from the cache until the cache
-// size is less than or equal to size. This can be used to implement manual
-// eviction or soft/hard limits via a service goroutine.
-//
-func (c *Cache) EvictToSize(size int64) {
-	c.m.Lock()
-	for i := c.list.back(); c.sz > size && i != c.list.sentinel(); i = c.evict(i) {
-	}
-	c.m.Unlock()
-}
-
-// EvictLRU forefully evicts the least recently used item from the cache. If an
-// EvictHandler has been configured and the callHandler argument is true, the
-// handler will be called before returning. If an item was evicted, the function
-// returns the evicted item and true, otherwise it returns nil and false.
-func (c *Cache) EvictLRU(callHandler bool) (v Value, ok bool) {
-	c.m.Lock()
-	i := c.list.back()
-	if i == c.list.sentinel() {
-		c.m.Unlock()
-		return nil, false
-	}
-	v = i.v
-	delete(c.imap, i.k)
-	c.remove(i)
-	freeItem(i)
-	c.m.Unlock()
-	if callHandler {
-		c.callEvictHandler(v)
-	}
-	return v, true
-}
-
-// Len returns the number of items in the cache.
-//
-func (c *Cache) Len() int {
-	c.m.Lock()
-	l := len(c.imap)
-	c.m.Unlock()
 	return l
 }
 
-// Size returns the total size of the items present in the cache.
-//
-func (c *Cache) Size() int64 {
-	c.m.Lock()
-	sz := c.sz
-	c.m.Unlock()
-	return sz
+func (l *LRU[K, V]) Set(key K, value V) {
+	hash := l.hash(key)
+	var i int
+	for i = l.idx(hash); l.items[i].set; i = l.next(i) {
+		if l.items[i].key == key {
+			l.unlink(i)
+			l.toFront(i)
+			l.items[i].value = value
+			if l.onEvict != nil {
+				l.Evict(l.onEvict)
+			}
+			return
+		}
+	}
+
+	// aim for a load factor < 0.75
+	// with the minimal table size at 5, the lower bound for the right hand side is 3
+	sz := len(l.items) - 1
+	if l.count >= sz-sz>>2 {
+		l.grow()
+		// after grow(), i is no longer valid, updatate it.
+		i = l.idxReal(hash)
+	}
+
+	l.count++
+	l.set(i, key, value)
+	if l.onEvict != nil {
+		l.Evict(l.onEvict)
+	}
 }
 
-// Capacity returns the cache capacity.
-//
-func (c *Cache) Capacity() int64 {
-	c.m.Lock()
-	sz := c.cap
-	c.m.Unlock()
-	return sz
+func (l *LRU[K, V]) idx(hash uint64) int {
+	// indices range from 1 -> len(items)-1, items[0] is the head/tail item
+	return (int(hash) & l.mask) + 1
 }
 
-// SetCapacity sets the cache capacity. There is no automatic pruning of cache entries
-// if the new capacity is less than the current cache size.
-//
-func (c *Cache) SetCapacity(cap int64) {
-	c.m.Lock()
-	c.cap = cap
-	c.m.Unlock()
+func (l *LRU[K, V]) idxReal(hash uint64) int {
+	var i int
+	for i = l.idx(hash); l.items[i].set; i = l.next(i) {
+	}
+	return i
 }
+
+func (l *LRU[K, V]) next(i int) int {
+	return (i & l.mask) + 1
+}
+
+func (l *LRU[K, V]) set(i int, key K, value V) {
+	it := &l.items[i]
+	it.key = key
+	it.value = value
+	it.set = true
+	l.toFront(i)
+}
+
+func (l *LRU[K, V]) Size() int {
+	return l.count
+}
+
+func (l *LRU[K, V]) Get(key K) (V, bool) {
+	var i int
+	for i = l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
+		if l.items[i].key == key {
+			l.unlink(i)
+			l.toFront(i)
+			return l.items[i].value, true
+		}
+	}
+
+	var zero V
+	return zero, false
+}
+
+func (l *LRU[K, V]) Delete(key K) {
+	for i := l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
+		if l.items[i].key == key {
+			l.del(i)
+			return
+		}
+	}
+}
+
+func (l *LRU[K, V]) del(i int) {
+	l.unlink(i)
+	l.clear(i)
+	l.count--
+	// re-hash following cells
+	for i := l.next(i); l.items[i].set; i = l.next(i) {
+		j := l.idx(l.hash(l.items[i].key))
+		if j != i {
+			// move l.items[i] to l.items[j]
+			// find correct target pos
+			for ; l.items[j].set; j = l.next(j) {
+			}
+			src := &l.items[i]
+			l.items[j] = *src
+			l.items[src.prev].next = j
+			l.items[src.next].prev = j
+			l.clear(i)
+		}
+	}
+}
+
+func (l *LRU[K, V]) clear(i int) {
+	var (
+		zeroK K
+		zeroV V
+		it    = &l.items[i]
+	)
+	it.key = zeroK
+	it.value = zeroV
+	it.set = false
+}
+
+func (l *LRU[K, V]) unlink(i int) {
+	next := l.items[i].next
+	prev := l.items[i].prev
+	l.items[prev].next = next
+	l.items[next].prev = prev
+}
+
+func (l *LRU[K, V]) toFront(i int) {
+	next := l.items[0].next
+	l.items[i].prev = 0
+	l.items[i].next = next
+	l.items[0].next = i
+	l.items[next].prev = i
+}
+
+// grow resizes the hash table to the next power of 2 + 1
+func (l *LRU[K, V]) grow() {
+	var src []item[K, V]
+	sz := (l.mask+1)*2 + 1
+	l.mask = sz - 2
+	src, l.items = l.items, make([]item[K, V], sz)
+
+	for i := src[0].prev; i != 0; i = src[i].prev {
+		key := src[i].key
+		l.set(l.idxReal(l.hash(key)), key, src[i].value)
+	}
+}
+
+// All returns an iterator for all keys in the lru table, lru first. The caller must not delete items while iterating.
+func (l *LRU[K, V]) Keys() func(yield func(K) bool) {
+	return func(yield func(K) bool) {
+		for i := l.items[0].prev; i != 0 && yield(l.items[i].key); i = l.items[i].prev {
+		}
+	}
+}
+
+// All returns an iterator for all values in the lru table, lru first. The caller must not delete items while iterating.
+func (l *LRU[K, V]) Values() func(yield func(V) bool) {
+	return func(yield func(V) bool) {
+		for i := l.items[0].prev; i != 0 && yield(l.items[i].value); i = l.items[i].prev {
+		}
+	}
+}
+
+// All returns an iterator for all key value pairs in the lru table, lru first. The caller must not delete items while iterating.
+func (l *LRU[K, V]) All() func(yield func(K, V) bool) {
+	return func(yield func(K, V) bool) {
+		for i := l.items[0].prev; i != 0 && yield(l.items[i].key, l.items[i].value); i = l.items[i].prev {
+		}
+	}
+}
+
+// Evict calls the evict callback for each item, lru first, and deletes them until the evict callback function returns false.
+func (l *LRU[K, V]) Evict(evict func(K, V) bool) {
+	for {
+		i := l.items[0].prev
+		if i == 0 || !evict(l.items[i].key, l.items[i].value) {
+			return
+		}
+		l.del(i)
+	}
+}
+
+func (l *LRU[K, V]) LeastRecent() (K, V, bool) {
+	i := l.items[0].prev
+	// l.items[i].key and l.items[i].value are zero values for K and V
+	return l.items[i].key, l.items[i].value, i != 0
+}
+
+func (l *LRU[K, V]) MostRecent() (K, V, bool) {
+	i := l.items[0].next
+	return l.items[i].key, l.items[i].value, i != 0
+}
+
+// // Package lru implements an LRU cache with variable item size and automatic
+// // item eviction.
+// //
+// // For performance reasons, the lru list is kept in a custom list
+// // implementation, it does not use Go's container/list.
+// //
+// // The cache size is determined by the actual size of the contained items, or
+// // more precisely by the size specified in the call to Set() for each new item.
+// // The Cache.Size() and Cache.Len() methods return distinct quantities.
+// //
+// // The default cache eviction policy is cache size vs. capacity. Users who need
+// // to count items can set the size of each item to 1, in which case Len() ==
+// // Size(). If a balance between item count and size is desired, another option
+// // is to set the cache capacity to NoCap and use a custom eviction function. See
+// // the example for EvictToSize().
+// //
+// // Item creation and removal callback handlers are also supported. The item
+// // creation handler enables a pattern like
+// //
+// //	value, err = cache.Get(key)
+// //	if value == nil {
+// //		// no value found, make one
+// //		v, size, _ := newValueForKey(key)
+// //		cache.Set(key, v, size)
+// //		value = v
+// //	}
+// //
+// // to work as an atomic cache operation via a single Get() call.
+// //
+// // The package has built-in support for concurrent use. Callers must be aware
+// // that when handlers configured with NewValueHandler and EvictHandler are
+// // called, the cache may be in a locked state. Therefore such handlers must not
+// // make any direct or indirect calls to the cache.
+// //
+// // The Key and Value types are defined in types.go as interfaces. Users who need
+// // to use concrete types instead of interfaces can easily customize these by
+// // vendoring the package then redefine Key and Value in types.go. This file is
+// // dedicated to this purpose and should not change in future versions.
