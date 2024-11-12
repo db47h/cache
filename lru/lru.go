@@ -44,7 +44,7 @@ type item[K comparable, V any] struct {
 func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
 	l := &LRU[K, V]{
 		// minimal table size: head/tail node + 3 items + 1 free cell
-		// this is to keep the growth check happy for up to 3 items
+		// anything lower may lead to a load factor = 1; depending on growth rules in Set()
 		items:   make([]item[K, V], 5),
 		mask:    3,
 		hash:    hash,
@@ -68,13 +68,11 @@ func (l *LRU[K, V]) Set(key K, value V) {
 		}
 	}
 
-	// aim for a load factor < 0.75
-	// with the minimal table size at 5, the lower bound for the right hand side is 3
-	sz := len(l.items) - 1
-	if l.count >= sz-sz>>2 {
+	// aim for a load factor <= 0.5
+	if l.count > len(l.items)>>1 {
 		l.grow()
-		// after grow(), i is no longer valid, updatate it.
-		i = l.idxReal(hash)
+		// i is no longer valid, update it.
+		i = l.insertIdx(hash)
 	}
 
 	l.count++
@@ -89,7 +87,7 @@ func (l *LRU[K, V]) idx(hash uint64) int {
 	return (int(hash) & l.mask) + 1
 }
 
-func (l *LRU[K, V]) idxReal(hash uint64) int {
+func (l *LRU[K, V]) insertIdx(hash uint64) int {
 	var i int
 	for i = l.idx(hash); l.items[i].set; i = l.next(i) {
 	}
@@ -113,8 +111,7 @@ func (l *LRU[K, V]) Size() int {
 }
 
 func (l *LRU[K, V]) Get(key K) (V, bool) {
-	var i int
-	for i = l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
+	for i := l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
 		if l.items[i].key == key {
 			l.unlink(i)
 			l.toFront(i)
@@ -191,7 +188,7 @@ func (l *LRU[K, V]) grow() {
 
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
-		l.set(l.idxReal(l.hash(key)), key, src[i].value)
+		l.set(l.insertIdx(l.hash(key)), key, src[i].value)
 	}
 }
 
@@ -240,42 +237,3 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 	i := l.items[0].next
 	return l.items[i].key, l.items[i].value, i != 0
 }
-
-// // Package lru implements an LRU cache with variable item size and automatic
-// // item eviction.
-// //
-// // For performance reasons, the lru list is kept in a custom list
-// // implementation, it does not use Go's container/list.
-// //
-// // The cache size is determined by the actual size of the contained items, or
-// // more precisely by the size specified in the call to Set() for each new item.
-// // The Cache.Size() and Cache.Len() methods return distinct quantities.
-// //
-// // The default cache eviction policy is cache size vs. capacity. Users who need
-// // to count items can set the size of each item to 1, in which case Len() ==
-// // Size(). If a balance between item count and size is desired, another option
-// // is to set the cache capacity to NoCap and use a custom eviction function. See
-// // the example for EvictToSize().
-// //
-// // Item creation and removal callback handlers are also supported. The item
-// // creation handler enables a pattern like
-// //
-// //	value, err = cache.Get(key)
-// //	if value == nil {
-// //		// no value found, make one
-// //		v, size, _ := newValueForKey(key)
-// //		cache.Set(key, v, size)
-// //		value = v
-// //	}
-// //
-// // to work as an atomic cache operation via a single Get() call.
-// //
-// // The package has built-in support for concurrent use. Callers must be aware
-// // that when handlers configured with NewValueHandler and EvictHandler are
-// // called, the cache may be in a locked state. Therefore such handlers must not
-// // make any direct or indirect calls to the cache.
-// //
-// // The Key and Value types are defined in types.go as interfaces. Users who need
-// // to use concrete types instead of interfaces can easily customize these by
-// // vendoring the package then redefine Key and Value in types.go. This file is
-// // dedicated to this purpose and should not change in future versions.

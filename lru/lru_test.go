@@ -66,15 +66,14 @@ func TestLRU_Set(t *testing.T) {
 
 func TestLRU_Set_onEvict(t *testing.T) {
 	var l *lru.LRU[string, int]
-	// the onEvict callback is called by LRU.Set *before* updating the table
-	// so the actual size when returning may be 2 or 3, depending on wether
-	// a new entry was added or not.
 	l = lru.New(hashString, func(string, int) bool { return l.Size() > 2 })
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
 
-	expectedSize := 3
+	// onEvict is called after entry update or insertion, so we expect only two items
+	// left.
+	expectedSize := 2
 
 	if l.Size() != expectedSize {
 		t.Fatalf("Size(): expected %d; got %d", expectedSize, l.Size())
@@ -204,28 +203,32 @@ func randInts(n int) []int {
 	return vs
 }
 
-// TODO: change the # of entries so that we benchmark at worst case scenario for LRU (i.e. load factor = 0.75)
+// worst case scenario for LRU (i.e. load factor = 0.5)
+const (
+	maxItemCount = 1024
+	sampleSize   = maxItemCount * 2
+)
 
 func Benchmark_LRU_int_int(b *testing.B) {
 	var l *lru.LRU[int, int]
 	l = lru.New(
-		func(i int) uint64 { return uint64(i) % 10789272506851322447 },
-		func(int, int) bool { return l.Size() > 1024 })
-	vs := randInts(2048)
+		func(i int) uint64 { return uint64(i) },
+		func(int, int) bool { return l.Size() > maxItemCount })
+	vs := randInts(sampleSize)
 	b.ResetTimer()
 	for i := range b.N {
-		l.Set(vs[b.N&2047], i)
+		l.Set(vs[i%len(vs)], i)
 	}
 }
 
 func Benchmark_map_int_int(b *testing.B) {
-	l := make(map[int]int, 1024)
-	vs := randInts(2048)
+	l := make(map[int]int, maxItemCount)
+	vs := randInts(sampleSize)
 	b.ResetTimer()
 	for i := range b.N {
 		// delete lru
-		delete(l, vs[b.N&2047])
-		l[vs[(b.N+1024)&2047]] = i
+		delete(l, vs[i%len(vs)])
+		l[vs[(i+maxItemCount)%len(vs)]] = i
 	}
 }
 
@@ -234,7 +237,7 @@ func randStrings(n int) []string {
 	rnd := rand.NewPCG(0xdeadbeefbaadf00d, 0x123456789abcdef0)
 	var k []byte
 	for i := range vs {
-		k = strconv.AppendInt(k[:0], int64(rnd.Uint64()&2047), 16)
+		k = strconv.AppendUint(k[:0], rnd.Uint64(), 16)
 		vs[i] = string(k)
 	}
 	return vs
@@ -244,23 +247,23 @@ func Benchmark_LRU_string_string(b *testing.B) {
 	var l *lru.LRU[string, string]
 	l = lru.New(
 		func(s string) uint64 { return maphash.String(seed, s) },
-		func(string, string) bool { return l.Size() > 1024 })
-	vs := randStrings(2048)
+		func(string, string) bool { return l.Size() > maxItemCount })
+	vs := randStrings(sampleSize)
 	b.ResetTimer()
-	for range b.N {
-		s := vs[b.N&2047]
+	for i := range b.N {
+		s := vs[i%sampleSize]
 		l.Set(s, s)
 	}
 }
 
-func Benchmark_map_string(b *testing.B) {
+func Benchmark_map_string_string(b *testing.B) {
 	l := make(map[string]string)
-	vs := randStrings(2048)
+	vs := randStrings(sampleSize)
 	b.ResetTimer()
-	for range b.N {
+	for i := range b.N {
 		// delete lru
-		delete(l, vs[b.N&2047])
-		s := vs[(b.N+1024)&2047]
+		delete(l, vs[i%sampleSize])
+		s := vs[(i+maxItemCount)%sampleSize]
 		l[s] = s
 	}
 }
