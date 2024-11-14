@@ -2,6 +2,7 @@ package lru_test
 
 import (
 	"hash/maphash"
+	"math/bits"
 	"math/rand/v2"
 	"strconv"
 	"testing"
@@ -212,7 +213,7 @@ const (
 func Benchmark_LRU_int_int(b *testing.B) {
 	var l *lru.LRU[int, int]
 	l = lru.New(
-		func(i int) uint64 { return uint64(i) },
+		hashInt,
 		func(int, int) bool { return l.Size() > maxItemCount })
 	vs := randInts(sampleSize)
 	b.ResetTimer()
@@ -266,4 +267,22 @@ func Benchmark_map_string_string(b *testing.B) {
 		s := vs[(i+maxItemCount)%sampleSize]
 		l[s] = s
 	}
+}
+
+const (
+	m5       = 0x1d8e4e27c47d124f
+	m58      = m5 ^ 8
+	hashkey0 = 11132908511473517310
+	hashkey1 = 14989300788721850024
+)
+
+// hashInt is identical to Go's hash function except that we use fixed hash keys (randomly generated)
+func hashInt(i int) uint64 {
+	a := uint64(i)
+	return mix(m5^8, mix(a^hashkey1, a^hashkey0))
+}
+
+func mix(a, b uint64) uint64 {
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	return hi ^ lo
 }
