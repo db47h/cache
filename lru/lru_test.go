@@ -222,6 +222,8 @@ func Benchmark_LRU_int_int(b *testing.B) {
 	}
 }
 
+// TODO: change the benchmarks so that at every step, we have 1/2 chance to update an existing item
+
 func Benchmark_map_int_int(b *testing.B) {
 	l := make(map[int]int, maxItemCount)
 	vs := randInts(sampleSize)

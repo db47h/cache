@@ -38,7 +38,7 @@ type item[K comparable, V any] struct {
 	value V
 	prev  int
 	next  int
-	set   bool
+	psl   int
 }
 
 func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
@@ -55,12 +55,13 @@ func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU
 
 func (l *LRU[K, V]) Set(key K, value V) {
 	hash := l.hash(key)
-	var i int
-	for i = l.idx(hash); l.items[i].set; i = l.next(i) {
+	var i, p int
+	for i, p = l.idx(hash), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
 		if l.items[i].key == key {
 			l.unlink(i)
 			l.toFront(i)
 			l.items[i].value = value
+			l.items[i].psl = p
 			if l.onEvict != nil {
 				l.Evict(l.onEvict)
 			}
@@ -72,11 +73,11 @@ func (l *LRU[K, V]) Set(key K, value V) {
 	if l.count > len(l.items)>>1 {
 		l.grow()
 		// i is no longer valid, update it.
-		i = l.insertIdx(hash)
+		i, p = l.insertIdx(hash)
 	}
 
 	l.count++
-	l.set(i, key, value)
+	l.set(i, p, key, value)
 	if l.onEvict != nil {
 		l.Evict(l.onEvict)
 	}
@@ -87,22 +88,21 @@ func (l *LRU[K, V]) idx(hash uint64) int {
 	return (int(hash) & l.mask) + 1
 }
 
-func (l *LRU[K, V]) insertIdx(hash uint64) int {
-	var i int
-	for i = l.idx(hash); l.items[i].set; i = l.next(i) {
+func (l *LRU[K, V]) insertIdx(hash uint64) (i int, p int) {
+	for i, p = l.idx(hash), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
 	}
-	return i
+	return i, p
 }
 
 func (l *LRU[K, V]) next(i int) int {
 	return (i & l.mask) + 1
 }
 
-func (l *LRU[K, V]) set(i int, key K, value V) {
+func (l *LRU[K, V]) set(i, p int, key K, value V) {
 	it := &l.items[i]
 	it.key = key
 	it.value = value
-	it.set = true
+	it.psl = p
 	l.toFront(i)
 }
 
@@ -111,7 +111,7 @@ func (l *LRU[K, V]) Size() int {
 }
 
 func (l *LRU[K, V]) Get(key K) (V, bool) {
-	for i := l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
+	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
 		if l.items[i].key == key {
 			l.unlink(i)
 			l.toFront(i)
@@ -124,7 +124,7 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 }
 
 func (l *LRU[K, V]) Delete(key K) {
-	for i := l.idx(l.hash(key)); l.items[i].set; i = l.next(i) {
+	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
 		if l.items[i].key == key {
 			l.del(i)
 			return
@@ -136,20 +136,27 @@ func (l *LRU[K, V]) del(i int) {
 	l.unlink(i)
 	l.clear(i)
 	l.count--
-	// re-hash following cells
-	for i := l.next(i); l.items[i].set; i = l.next(i) {
-		j := l.idx(l.hash(l.items[i].key))
-		if j != i {
-			// move l.items[i] to l.items[j]
-			// find correct target pos
-			for ; l.items[j].set; j = l.next(j) {
-			}
-			src := &l.items[i]
-			l.items[j] = *src
-			l.items[src.prev].next = j
-			l.items[src.next].prev = j
-			l.clear(i)
+
+	free := i
+	p := 1
+	for i = l.next(i); l.items[i].psl != 0; i, p = l.next(i), p+1 {
+		it := &l.items[i]
+		if it.psl <= p {
+			continue
 		}
+		f := &l.items[free]
+		f.key = it.key
+		f.value = it.value
+		prev := it.prev
+		next := it.next
+		f.prev = prev
+		f.next = next
+		f.psl = it.psl - p
+		l.items[prev].next = free
+		l.items[next].prev = free
+		l.clear(i)
+		free = i
+		p = 0
 	}
 }
 
@@ -161,7 +168,7 @@ func (l *LRU[K, V]) clear(i int) {
 	)
 	it.key = zeroK
 	it.value = zeroV
-	it.set = false
+	it.psl = 0
 }
 
 func (l *LRU[K, V]) unlink(i int) {
@@ -188,7 +195,8 @@ func (l *LRU[K, V]) grow() {
 
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
-		l.set(l.insertIdx(l.hash(key)), key, src[i].value)
+		idx, probes := l.insertIdx(l.hash(key))
+		l.set(idx, probes, key, src[i].value)
 	}
 }
 
