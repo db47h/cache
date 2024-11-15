@@ -43,10 +43,10 @@ type item[K comparable, V any] struct {
 
 func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
 	l := &LRU[K, V]{
-		// minimal table size: head/tail node + 3 items + 1 free cell
+		// minimal table size: head/tail node + 7 items + 1 free cell
 		// anything lower may lead to a load factor = 1; depending on growth rules in Set()
-		items:   make([]item[K, V], 5),
-		mask:    3,
+		items:   make([]item[K, V], 9),
+		mask:    7,
 		hash:    hash,
 		onEvict: onEvict,
 	}
@@ -69,8 +69,9 @@ func (l *LRU[K, V]) Set(key K, value V) {
 		}
 	}
 
-	// aim for a load factor <= 0.5
-	if l.count > len(l.items)>>1 {
+	// aim for a load factor <= 0.75
+	sz := len(l.items) - 1
+	if l.count > sz-sz>>2 {
 		l.grow()
 		// i is no longer valid, update it.
 		i, p = l.insertIdx(hash)
@@ -121,6 +122,18 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 
 	var zero V
 	return zero, false
+}
+
+func (l *LRU[K, V]) GetPtr(key K) (*V, bool) {
+	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
+		if l.items[i].key == key {
+			l.unlink(i)
+			l.toFront(i)
+			return &l.items[i].value, true
+		}
+	}
+
+	return nil, false
 }
 
 func (l *LRU[K, V]) Delete(key K) {

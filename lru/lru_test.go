@@ -3,7 +3,6 @@ package lru_test
 import (
 	"hash/maphash"
 	"math/bits"
-	"math/rand/v2"
 	"strconv"
 	"testing"
 	"time"
@@ -184,9 +183,8 @@ func TestLRU_Delete(t *testing.T) {
 	l := populate()
 
 	seed := time.Now().UnixNano()
-	rnd := rand.New(rand.NewPCG(uint64(seed), uint64(seed)))
 	for i := 0; i < 1000 && l.Size() > 0; i++ {
-		j := rnd.IntN(len(td))
+		j := xo.IntN(len(td))
 		l.Delete(td[j].key)
 		if _, ok := l.Get(td[j].key); ok {
 			t.Logf("seed %d", seed)
@@ -195,80 +193,160 @@ func TestLRU_Delete(t *testing.T) {
 	}
 }
 
-func randInts(n int) []int {
-	vs := make([]int, n)
-	rnd := rand.NewPCG(0xdeadbeefbaadf00d, 0x123456789abcdef0)
-	for i := range vs {
-		vs[i] = int(rnd.Uint64())
-	}
-	return vs
-}
-
 // worst case scenario for LRU (i.e. load factor = 0.5)
 const (
-	maxItemCount = 1024
-	sampleSize   = maxItemCount * 2
+	maxItemCount = (1 << 20) * 75 / 100
 )
 
-func Benchmark_LRU_int_int(b *testing.B) {
+func Benchmark_LRU_int_int_90(b *testing.B) {
+	bench_LRU_int_int(90, b)
+}
+
+func Benchmark_LRU_int_int_75(b *testing.B) {
+	bench_LRU_int_int(75, b)
+}
+
+func Benchmark_LRU_int_int_50(b *testing.B) {
+	bench_LRU_int_int(50, b)
+}
+
+// typical workload for a cache were we fetch entries and create one if not found
+// with the given hit ratio (expressed as hit%)
+func bench_LRU_int_int(hitp int, b *testing.B) {
+	xo.Reset()
 	var l *lru.LRU[int, int]
 	l = lru.New(
 		hashInt,
 		func(int, int) bool { return l.Size() > maxItemCount })
-	vs := randInts(sampleSize)
+
+	sampleSize := maxItemCount * 100 / hitp
 	b.ResetTimer()
-	for i := range b.N {
-		l.Set(vs[i%len(vs)], i)
+	for range b.N {
+		i := xo.IntN(sampleSize)
+		if _, ok := l.Get(i); !ok {
+			l.Set(i, i)
+		}
 	}
 }
 
-// TODO: change the benchmarks so that at every step, we have 1/2 chance to update an existing item
+func Benchmark_LRU_string_string_90(b *testing.B) {
+	bench_LRU_string_string(90, b)
+}
 
-func Benchmark_map_int_int(b *testing.B) {
+func Benchmark_LRU_string_string_75(b *testing.B) {
+	bench_LRU_string_string(75, b)
+}
+
+func Benchmark_LRU_string_string_50(b *testing.B) {
+	bench_LRU_string_string(50, b)
+}
+
+func bench_LRU_string_string(hitp int, b *testing.B) {
+	xo.Reset()
+	var l *lru.LRU[string, string]
+	l = lru.New(hashString, func(string, string) bool { return l.Size() > maxItemCount })
+	sampleSize := maxItemCount * 100 / hitp
+	s := stringArray(sampleSize)
+	b.ResetTimer()
+	for range b.N {
+		i := xo.IntN(sampleSize)
+		if _, ok := l.Get(s[i]); !ok {
+			l.Set(s[i], s[i])
+		}
+	}
+}
+
+func Benchmark_map_int_int_90(b *testing.B) {
+	bench_map_int_int(90, b)
+}
+
+func Benchmark_map_int_int_75(b *testing.B) {
+	bench_map_int_int(75, b)
+}
+
+func Benchmark_map_int_int_50(b *testing.B) {
+	bench_map_int_int(50, b)
+}
+
+func bench_map_int_int(hitp int, b *testing.B) {
+	xo.Reset()
 	l := make(map[int]int, maxItemCount)
-	vs := randInts(sampleSize)
+	sampleSize := maxItemCount * 100 / hitp
+	// prefill
+	var h [maxItemCount]int
+	for i := range maxItemCount {
+		n := xo.IntN(sampleSize)
+		l[n] = n
+		h[i] = n
+	}
+
 	b.ResetTimer()
-	for i := range b.N {
-		// delete lru
-		delete(l, vs[i%len(vs)])
-		l[vs[(i+maxItemCount)%len(vs)]] = i
+	d := 0 // item to delete
+	hit := 0
+	miss := 0
+	for range b.N {
+		i := xo.IntN(sampleSize)
+		if _, ok := l[i]; !ok {
+			l[i] = i
+			delete(l, h[d])
+			h[d] = i
+			miss++
+		} else {
+			hit++
+		}
+		d = (d + 1) % maxItemCount
 	}
 }
 
-func randStrings(n int) []string {
+func Benchmark_map_string_string_90(b *testing.B) {
+	bench_map_string_string(90, b)
+}
+
+func Benchmark_map_string_string_75(b *testing.B) {
+	bench_map_string_string(75, b)
+}
+
+func Benchmark_map_string_string_50(b *testing.B) {
+	bench_map_string_string(50, b)
+}
+
+func bench_map_string_string(hitp int, b *testing.B) {
+	xo.Reset()
+	l := make(map[string]string, maxItemCount)
+	sampleSize := maxItemCount * 100 / hitp
+	s := stringArray(sampleSize)
+	// prefill
+	var h [maxItemCount]int
+	for i := range maxItemCount {
+		n := xo.IntN(sampleSize)
+		ss := s[n]
+		l[ss] = ss
+		h[i] = n
+	}
+
+	b.ResetTimer()
+	d := 0 // item to delete
+	for range b.N {
+		i := xo.IntN(sampleSize)
+		ss := s[i]
+		if _, ok := l[ss]; !ok {
+			l[ss] = ss
+			delete(l, s[h[d]])
+			h[d] = i
+		} else {
+		}
+		d = (d + 1) % maxItemCount
+	}
+}
+
+func stringArray(n int) []string {
 	vs := make([]string, n)
-	rnd := rand.NewPCG(0xdeadbeefbaadf00d, 0x123456789abcdef0)
 	var k []byte
 	for i := range vs {
-		k = strconv.AppendUint(k[:0], rnd.Uint64(), 16)
+		k = strconv.AppendUint(k[:0], xo.Uint64(), 10)
 		vs[i] = string(k)
 	}
 	return vs
-}
-
-func Benchmark_LRU_string_string(b *testing.B) {
-	var l *lru.LRU[string, string]
-	l = lru.New(
-		func(s string) uint64 { return maphash.String(seed, s) },
-		func(string, string) bool { return l.Size() > maxItemCount })
-	vs := randStrings(sampleSize)
-	b.ResetTimer()
-	for i := range b.N {
-		s := vs[i%sampleSize]
-		l.Set(s, s)
-	}
-}
-
-func Benchmark_map_string_string(b *testing.B) {
-	l := make(map[string]string)
-	vs := randStrings(sampleSize)
-	b.ResetTimer()
-	for i := range b.N {
-		// delete lru
-		delete(l, vs[i%sampleSize])
-		s := vs[(i+maxItemCount)%sampleSize]
-		l[s] = s
-	}
 }
 
 const (
@@ -287,4 +365,25 @@ func hashInt(i int) uint64 {
 func mix(a, b uint64) uint64 {
 	hi, lo := bits.Mul64(uint64(a), uint64(b))
 	return hi ^ lo
+}
+
+// xorshift64* PRNG. Very fast and good enough for our purpose.
+type xorshift64s uint64
+
+var xo xorshift64s = hashkey0
+
+// xorshift64*
+func (x *xorshift64s) Uint64() uint64 {
+	*x ^= *x >> 12
+	*x ^= *x << 25
+	*x ^= *x >> 27
+	return uint64(*x) * 2685821657736338717
+}
+
+func (x *xorshift64s) IntN(n int) int {
+	return int(xo.Uint64()&0x7FFFFFFFFFFFFFFF) % n
+}
+
+func (x *xorshift64s) Reset() {
+	*x = hashkey0
 }
