@@ -193,7 +193,7 @@ func TestLRU_Delete(t *testing.T) {
 	}
 }
 
-// worst case scenario for LRU (i.e. load factor = 0.5)
+// worst case scenario for LRU (i.e. load factor = 0.75)
 const (
 	maxItemCount = (1 << 20) * 75 / 100
 )

@@ -73,7 +73,7 @@ func (l *LRU[K, V]) Set(key K, value V) {
 	sz := len(l.items) - 1
 	if l.count > sz-sz>>2 {
 		l.grow()
-		// i is no longer valid, update it.
+		// i and p are no longer valid, update them.
 		i, p = l.insertIdx(hash)
 	}
 
@@ -124,18 +124,6 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
-func (l *LRU[K, V]) GetPtr(key K) (*V, bool) {
-	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
-		if l.items[i].key == key {
-			l.unlink(i)
-			l.toFront(i)
-			return &l.items[i].value, true
-		}
-	}
-
-	return nil, false
-}
-
 func (l *LRU[K, V]) Delete(key K) {
 	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
 		if l.items[i].key == key {
@@ -151,25 +139,17 @@ func (l *LRU[K, V]) del(i int) {
 	l.count--
 
 	free := i
-	p := 1
-	for i = l.next(i); l.items[i].psl != 0; i, p = l.next(i), p+1 {
-		it := &l.items[i]
-		if it.psl <= p {
-			continue
+	for i, p := l.next(i), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
+		if it := &l.items[i]; it.psl > p {
+			f := &l.items[free]
+			*f = *it
+			l.items[it.prev].next = free
+			l.items[it.next].prev = free
+			f.psl -= p
+			l.clear(i)
+			free = i
+			p = 0
 		}
-		f := &l.items[free]
-		f.key = it.key
-		f.value = it.value
-		prev := it.prev
-		next := it.next
-		f.prev = prev
-		f.next = next
-		f.psl = it.psl - p
-		l.items[prev].next = free
-		l.items[next].prev = free
-		l.clear(i)
-		free = i
-		p = 0
 	}
 }
 
