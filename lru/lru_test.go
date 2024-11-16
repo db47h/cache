@@ -1,12 +1,11 @@
 package lru_test
 
 import (
-	"hash/maphash"
-	"math/bits"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/db47h/cache/v2/hash"
 	"github.com/db47h/cache/v2/lru"
 )
 
@@ -25,14 +24,8 @@ var td = []struct {
 	// NO!
 }
 
-var seed = maphash.MakeSeed()
-
-func hashString(s string) uint64 {
-	return maphash.String(seed, s)
-}
-
 func populate() *lru.LRU[string, int] {
-	l := lru.New[string, int](hashString, nil)
+	l := lru.New[string, int](hash.String(), nil)
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -66,7 +59,7 @@ func TestLRU_Set(t *testing.T) {
 
 func TestLRU_Set_onEvict(t *testing.T) {
 	var l *lru.LRU[string, int]
-	l = lru.New(hashString, func(string, int) bool { return l.Size() > 2 })
+	l = lru.New(hash.String(), func(string, int) bool { return l.Size() > 2 })
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -180,6 +173,7 @@ func TestLRU_Values(t *testing.T) {
 }
 
 func TestLRU_Delete(t *testing.T) {
+	xo := New64S()
 	l := populate()
 
 	seed := time.Now().UnixNano()
@@ -213,10 +207,10 @@ func Benchmark_LRU_int_int_50(b *testing.B) {
 // typical workload for a cache were we fetch entries and create one if not found
 // with the given hit ratio (expressed as hit%)
 func bench_LRU_int_int(hitp int, b *testing.B) {
-	xo.Reset()
+	xo := New64S()
 	var l *lru.LRU[int, int]
 	l = lru.New(
-		hashInt,
+		hash.Number[int](),
 		func(int, int) bool { return l.Size() > maxItemCount })
 
 	sampleSize := maxItemCount * 100 / hitp
@@ -242,11 +236,11 @@ func Benchmark_LRU_string_string_50(b *testing.B) {
 }
 
 func bench_LRU_string_string(hitp int, b *testing.B) {
-	xo.Reset()
+	xo := New64S()
 	var l *lru.LRU[string, string]
-	l = lru.New(hashString, func(string, string) bool { return l.Size() > maxItemCount })
+	l = lru.New(hash.String(), func(string, string) bool { return l.Size() > maxItemCount })
 	sampleSize := maxItemCount * 100 / hitp
-	s := stringArray(sampleSize)
+	s := stringArray(xo, sampleSize)
 	b.ResetTimer()
 	for range b.N {
 		i := xo.IntN(sampleSize)
@@ -269,7 +263,7 @@ func Benchmark_map_int_int_50(b *testing.B) {
 }
 
 func bench_map_int_int(hitp int, b *testing.B) {
-	xo.Reset()
+	xo := New64S()
 	l := make(map[int]int, maxItemCount)
 	sampleSize := maxItemCount * 100 / hitp
 	// prefill
@@ -311,10 +305,10 @@ func Benchmark_map_string_string_50(b *testing.B) {
 }
 
 func bench_map_string_string(hitp int, b *testing.B) {
-	xo.Reset()
+	xo := New64S()
 	l := make(map[string]string, maxItemCount)
 	sampleSize := maxItemCount * 100 / hitp
-	s := stringArray(sampleSize)
+	s := stringArray(xo, sampleSize)
 	// prefill
 	var h [maxItemCount]int
 	for i := range maxItemCount {
@@ -339,7 +333,7 @@ func bench_map_string_string(hitp int, b *testing.B) {
 	}
 }
 
-func stringArray(n int) []string {
+func stringArray(xo *Xorshift64S, n int) []string {
 	vs := make([]string, n)
 	var k []byte
 	for i := range vs {
@@ -349,41 +343,26 @@ func stringArray(n int) []string {
 	return vs
 }
 
-const (
-	m5       = 0x1d8e4e27c47d124f
-	m58      = m5 ^ 8
-	hashkey0 = 11132908511473517310
-	hashkey1 = 14989300788721850024
-)
-
-// hashInt is identical to Go's hash function except that we use fixed hash keys (randomly generated)
-func hashInt(i int) uint64 {
-	a := uint64(i)
-	return mix(m5^8, mix(a^hashkey1, a^hashkey0))
+// A Xorshift64S is a xorshift64* PRNG. Fast enough to not skew benchmarks
+// and good enough for our purpose.
+type Xorshift64S struct {
+	x uint64
 }
 
-func mix(a, b uint64) uint64 {
-	hi, lo := bits.Mul64(uint64(a), uint64(b))
-	return hi ^ lo
+func (x *Xorshift64S) Uint64() uint64 {
+	v := x.x
+	v ^= v >> 12
+	v ^= v << 25
+	v ^= v >> 27
+	x.x = v
+	return uint64(v) * 2685821657736338717
 }
 
-// xorshift64* PRNG. Very fast and good enough for our purpose.
-type xorshift64s uint64
-
-var xo xorshift64s = hashkey0
-
-// xorshift64*
-func (x *xorshift64s) Uint64() uint64 {
-	*x ^= *x >> 12
-	*x ^= *x << 25
-	*x ^= *x >> 27
-	return uint64(*x) * 2685821657736338717
+// New64S returns a new Xorshift64S seeded with a fixed seed.
+func New64S() *Xorshift64S {
+	return &Xorshift64S{11132908511473517310}
 }
 
-func (x *xorshift64s) IntN(n int) int {
-	return int(xo.Uint64()&0x7FFFFFFFFFFFFFFF) % n
-}
-
-func (x *xorshift64s) Reset() {
-	*x = hashkey0
+func (x *Xorshift64S) IntN(n int) int {
+	return int(x.Uint64()&0x7fffffffffffffff) % n
 }
