@@ -261,7 +261,7 @@ func Benchmark_map_int_int_50(b *testing.B) {
 
 func bench_map_int_int(hitp int, b *testing.B) {
 	xo := New64S()
-	l := make(map[int]int, maxItemCount)
+	l := make(map[int]int, 8)
 	sampleSize := maxItemCount * 100 / hitp
 	// prefill
 	var h [maxItemCount]int

@@ -33,6 +33,7 @@ type LRU[K comparable, V any] struct {
 	items []item[K, V]
 	count int
 	mask  int
+	h     uint32
 }
 
 type item[K comparable, V any] struct {
@@ -40,7 +41,13 @@ type item[K comparable, V any] struct {
 	value V
 	prev  int
 	next  int
-	psl   int
+	bits  uint32
+	home  uint32
+}
+
+func (i *item[K, V]) isSet() bool {
+	// free buckets have both home and bits[0] == 0
+	return i.home|i.bits&1 != 0
 }
 
 // minimal table size: head/tail node + 7 items + 1 free cell
@@ -58,6 +65,7 @@ func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict fun
 		mask:    size - 1,
 		hash:    hash,
 		onEvict: onEvict,
+		h:       32,
 	}
 	return l
 }
@@ -68,33 +76,90 @@ func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU
 
 func (l *LRU[K, V]) Set(key K, value V) {
 	hash := l.hash(key)
-	var i, p int
-	for i, p = l.idx(hash), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
-		if l.items[i].key == key {
-			l.unlink(i)
-			l.toFront(i)
-			l.items[i].value = value
-			l.items[i].psl = p
-			if l.onEvict != nil {
-				l.Evict(l.onEvict)
-			}
-			return
+	if i, ok := l.find(l.idx(hash), key); ok {
+		l.unlink(i)
+		l.toFront(i)
+		l.items[i].key = key
+		l.items[i].value = value
+		if l.onEvict != nil {
+			l.Evict(l.onEvict)
 		}
+		return
 	}
-
-	// aim for a load factor <= 0.75
-	sz := len(l.items) - 1
-	if l.count > sz-sz>>2 {
+	// we need at least one free slot
+	if l.count >= len(l.items)-1 {
 		l.grow()
-		// i and p are no longer valid, update them.
-		i, p = l.insertIdx(hash)
 	}
-
+	for !l.insert(hash, key, value) {
+		l.grow()
+	}
 	l.count++
-	l.set(i, p, key, value)
 	if l.onEvict != nil {
 		l.Evict(l.onEvict)
 	}
+}
+
+func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
+	// "home" bucket
+	h := l.idx(hash)
+	// find a free slot
+	free := h
+	for ; l.items[free].isSet(); free = l.next(free) {
+	}
+shift:
+	if dist := (free - h + l.mask + 1) & l.mask; dist < int(l.h) {
+		// free slot within range of home slot, insert item @l.items[i].free
+		it := &l.items[free]
+		it.key = key
+		it.value = value
+		it.home = uint32(dist)
+		l.setHomeBit(h, uint32(dist))
+		l.toFront(free)
+		return true
+	}
+	idx := l.idxHome(free, l.h-1)
+	// loop back from farthest possible bucket
+	for i, hmax := idx, uint32(1); i != free; i, hmax = l.next(i), hmax+1 {
+		// hmax represents how far an item can be from its home position
+		// in order to be movable
+		if l.items[i].home < hmax {
+			// move i to free
+			f := &l.items[free]
+			it := &l.items[i]
+			f.key = it.key
+			f.value = it.value
+			f.prev = it.prev
+			f.next = it.next
+			f.home = it.home + l.h - hmax
+			l.items[f.prev].next = free
+			l.items[f.next].prev = free
+			l.setHomeBit(l.idxHome(free, f.home), f.home)
+			l.clear(i)
+			free = i
+			goto shift
+		}
+	}
+	return false
+}
+
+func (l *LRU[K, V]) setHomeBit(h int, dist uint32) {
+	l.items[h].bits |= uint32(1) << uint32(dist)
+}
+
+func (l *LRU[K, V]) find(i int, key K) (int, bool) {
+	b := l.items[i].bits
+	for b != 0 {
+		n := bits.TrailingZeros32(b)
+		i = (i-1+n)&l.mask + 1
+		if l.items[i].key == key {
+			return i, true
+		}
+		// if rhs is a signed type, Go will check if rhs < 0 and panic if true.
+		// so we convert rhs to uint in order to prevent this check
+		b >>= uint8(n + 1)
+		i++
+	}
+	return i, false
 }
 
 func (l *LRU[K, V]) idx(hash uint64) int {
@@ -102,22 +167,12 @@ func (l *LRU[K, V]) idx(hash uint64) int {
 	return (int(hash) & l.mask) + 1
 }
 
-func (l *LRU[K, V]) insertIdx(hash uint64) (i int, p int) {
-	for i, p = l.idx(hash), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
-	}
-	return i, p
-}
-
 func (l *LRU[K, V]) next(i int) int {
 	return (i & l.mask) + 1
 }
 
-func (l *LRU[K, V]) set(i, p int, key K, value V) {
-	it := &l.items[i]
-	it.key = key
-	it.value = value
-	it.psl = p
-	l.toFront(i)
+func (l *LRU[K, V]) idxHome(i int, h uint32) int {
+	return (i-int(h)+l.mask)&l.mask + 1
 }
 
 func (l *LRU[K, V]) Size() int {
@@ -125,24 +180,18 @@ func (l *LRU[K, V]) Size() int {
 }
 
 func (l *LRU[K, V]) Get(key K) (V, bool) {
-	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
-		if l.items[i].key == key {
-			l.unlink(i)
-			l.toFront(i)
-			return l.items[i].value, true
-		}
+	if i, ok := l.find(l.idx(l.hash(key)), key); ok {
+		l.unlink(i)
+		l.toFront(i)
+		return l.items[i].value, true
 	}
-
 	var zero V
 	return zero, false
 }
 
 func (l *LRU[K, V]) Delete(key K) {
-	for i := l.idx(l.hash(key)); l.items[i].psl != 0; i = l.next(i) {
-		if l.items[i].key == key {
-			l.del(i)
-			return
-		}
+	if i, ok := l.find(l.idx(l.hash(key)), key); ok {
+		l.del(i)
 	}
 }
 
@@ -150,20 +199,6 @@ func (l *LRU[K, V]) del(i int) {
 	l.unlink(i)
 	l.clear(i)
 	l.count--
-
-	free := i
-	for i, p := l.next(i), 1; l.items[i].psl != 0; i, p = l.next(i), p+1 {
-		if it := &l.items[i]; it.psl > p {
-			f := &l.items[free]
-			*f = *it
-			l.items[it.prev].next = free
-			l.items[it.next].prev = free
-			f.psl -= p
-			l.clear(i)
-			free = i
-			p = 0
-		}
-	}
 }
 
 func (l *LRU[K, V]) clear(i int) {
@@ -174,7 +209,9 @@ func (l *LRU[K, V]) clear(i int) {
 	)
 	it.key = zeroK
 	it.value = zeroV
-	it.psl = 0
+	h := l.idxHome(i, it.home)
+	l.items[h].bits &= ^(uint32(1) << it.home)
+	it.home = 0
 }
 
 func (l *LRU[K, V]) unlink(i int) {
@@ -198,11 +235,12 @@ func (l *LRU[K, V]) grow() {
 	sz := (l.mask+1)*2 + 1
 	l.mask = sz - 2
 	src, l.items = l.items, make([]item[K, V], sz)
-
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
-		idx, probes := l.insertIdx(l.hash(key))
-		l.set(idx, probes, key, src[i].value)
+		if !l.insert(l.hash(key), key, src[i].value) {
+			// TODO: grow again instead of panicking
+			panic("recursive grow calls")
+		}
 	}
 }
 
@@ -251,3 +289,7 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 	i := l.items[0].next
 	return l.items[i].key, l.items[i].value, i != 0
 }
+
+func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(len(l.items)-1) }
+
+// func (l *LRU[K, V]) Load() float64 { return float64(len(l.items) - 1) }
