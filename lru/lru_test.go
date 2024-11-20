@@ -25,7 +25,7 @@ var td = []struct {
 }
 
 func populate() *lru.LRU[string, int] {
-	l := lru.New[string, int](func(s string) uint64 { return uint64(s[0]) }, nil)
+	l := lru.New[string, int](hash.String(), nil)
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -187,9 +187,9 @@ func TestLRU_Delete(t *testing.T) {
 	}
 }
 
-// worst case scenario for LRU (i.e. load factor = 0.75)
+// aim for a load factor ~ 0.9
 const (
-	maxItemCount = (1 << 20) * 75 / 100
+	maxItemCount = (1 << 20) * 90 / 100
 )
 
 func Benchmark_LRU_int_int_90(b *testing.B) {
@@ -218,7 +218,6 @@ func bench_LRU_int_int(hitp int, b *testing.B) {
 			l.Set(i, i)
 		}
 	}
-	b.Log(l.Load())
 }
 
 func Benchmark_LRU_string_string_90(b *testing.B) {

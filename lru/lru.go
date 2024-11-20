@@ -23,13 +23,9 @@
 // called whenever a new item is inserted into the cache.
 package lru
 
-import (
-	"fmt"
-	"math/bits"
-	"os"
-)
+import "math/bits"
 
-// LRU represents a Least Recent Used hash table.
+// LRU represents a Least Recently Used hash table.
 type LRU[K comparable, V any] struct {
 	hash    func(K) uint64
 	onEvict func(K, V) bool
@@ -45,17 +41,19 @@ type item[K comparable, V any] struct {
 	value V
 	prev  int
 	next  int
-	bNext int // next bucket where items[n].bHome == tems[items[n].bNext].bHome
-	bHome int
-	bHead int // first bucket for which hash(items[items[n].bHead].key)%len(items) == n
+	// first bucket for which hash(items[items[n].bHead].key)%len(items) == n
+	bHead int
+	// next bucket where items[n].bHome == tems[items[n].bNext].bHome.
+	// if items[n].bNext == -1 => bucket n is the last element of the list
+	// if items[n].bNext == 0 => bucket n is free
+	bNext int
 }
 
 func (i *item[K, V]) isSet() bool {
-	return i.bHome != 0
+	return i.bNext != 0
 }
 
-// minimal table size: head/tail node + 7 items + 1 free cell
-// anything lower may lead to a load factor = 1; depending on growth rules in Set()
+// minimal table size: 7 items + 1 free cell
 const MinSize = 8
 
 func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
@@ -64,14 +62,14 @@ func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict fun
 	}
 	b := bits.UintSize - bits.LeadingZeros(uint(size)-1)
 	size = 1 << b
-	l := &LRU[K, V]{
+	return &LRU[K, V]{
+		// size + 1 for head/tail node at items[0]
 		items:   make([]item[K, V], size+1),
 		mask:    size - 1,
 		hash:    hash,
 		onEvict: onEvict,
-		h:       64,
+		h:       MinSize,
 	}
-	return l
 }
 
 func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
@@ -121,9 +119,9 @@ shift:
 		return true
 	}
 	// loop back from farthest possible bucket
-	for i := l.idxHome(free, l.h-1); i != free; i = l.next(i) {
-		if l.dist(free, l.items[i].bHome) < l.h {
-			// move i to free
+	for h := l.idxSub(free, l.h-1); h != free; h = l.next(h) {
+		if i := l.items[h].bHead; i > 0 && l.dist(free, i) < l.h {
+			// move s to free
 			s := &l.items[i]
 			d := &l.items[free]
 			d.key = s.key
@@ -131,16 +129,10 @@ shift:
 			prev, next := s.prev, s.next
 			d.prev, d.next = prev, next
 			l.items[prev].next, l.items[next].prev = free, free
-			d.bHome = s.bHome
 			d.bNext = s.bNext
 			// DO NOT UPDATE d.bHead
-			// find i in bucket chain, replace by free
-			p := &l.items[d.bHome].bHead
-			for ; *p != i; p = &l.items[*p].bNext {
-			}
-			*p = free
-			// mark i as free. key and value will be overwritten later
-			l.items[i].bHome = 0
+			l.items[h].bHead = free
+			// just mark i as free. key and value will be overwritten later
 			l.items[i].bNext = 0
 			free = i
 			goto shift
@@ -149,9 +141,13 @@ shift:
 	return false
 }
 
-func (l *LRU[K, V]) addToBucket(h int, i int) {
-	l.items[h].bHead, l.items[i].bNext = i, l.items[h].bHead
-	l.items[i].bHome = h
+func (l *LRU[K, V]) addToBucket(h int, free int) {
+	head := l.items[h].bHead
+	if head == 0 {
+		head = -1
+	}
+	l.items[h].bHead = free
+	l.items[free].bNext = head
 }
 
 func (l *LRU[K, V]) dist(i, j int) int {
@@ -160,7 +156,7 @@ func (l *LRU[K, V]) dist(i, j int) int {
 }
 
 func (l *LRU[K, V]) find(i int, key K) int {
-	for i = l.items[i].bHead; i != 0; i = l.items[i].bNext {
+	for i = l.items[i].bHead; i > 0; i = l.items[i].bNext {
 		if l.items[i].key == key {
 			return i
 		}
@@ -177,8 +173,8 @@ func (l *LRU[K, V]) next(i int) int {
 	return (i & l.mask) + 1
 }
 
-func (l *LRU[K, V]) idxHome(i int, h int) int {
-	return (i-h+l.mask)&l.mask + 1
+func (l *LRU[K, V]) idxSub(i int, j int) int {
+	return (i-j+l.mask)&l.mask + 1
 }
 
 func (l *LRU[K, V]) Size() int {
@@ -196,12 +192,13 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 }
 
 func (l *LRU[K, V]) Delete(key K) {
-	if i := l.find(l.idx(l.hash(key)), key); i != 0 {
-		l.del(i)
+	h := l.idx(l.hash(key))
+	if i := l.find(h, key); i != 0 {
+		l.del(h, i)
 	}
 }
 
-func (l *LRU[K, V]) del(i int) {
+func (l *LRU[K, V]) del(h, i int) {
 	l.unlink(i)
 	// find previous item in bucket
 	var (
@@ -209,16 +206,19 @@ func (l *LRU[K, V]) del(i int) {
 		zeroV V
 		it    = &l.items[i]
 	)
+	l.count--
 	it.key, it.value = zeroK, zeroV
+	// leave it.bHead alone
 	// update bucket chain
-	p := &l.items[it.bHome].bHead
+	next := it.bNext
+	it.bNext = 0
+	p := &l.items[h].bHead
 	for ; *p != i; p = &l.items[*p].bNext {
 	}
-	*p = it.bNext
-	it.bHome = 0
-	it.bNext = 0
-	// leave it.bHead alone
-	l.count--
+	*p = next
+	// if l.items[i] was the last bucket of the chain, we'll
+	// have l.items[h].bHead = -1. We do not check this as this
+	// is not an issue.
 }
 
 func (l *LRU[K, V]) unlinkBucket(h, i int) {
@@ -241,21 +241,28 @@ func (l *LRU[K, V]) toFront(i int) {
 
 // grow resizes the hash table to the next power of 2 + 1
 func (l *LRU[K, V]) grow() {
-	// TODO: this is a good spot to grow l.h
-	// for example if we need to grow the table with a load factor < 0.5
-	var src []item[K, V]
-	sz := (l.mask+1)*2 + 1
-	fmt.Fprintf(os.Stderr, "grow %d -> %d, load: %f, H: %d\n", sz/2, sz, l.Load(), l.h)
-	if l.Load() < 0.75 {
+	sz := len(l.items) - 1
+	src := l.items
+	// We should be able to achieve load factors above 0.9 with H between 64 and 128 and decent hash functions
+	// Below that, either H is too low, or the hash function is bad.
+	// if ɑ < 0.9, try to increase H first as this does not require re-hashing.
+	if l.Load() < 0.9 && l.h < sz {
 		l.h <<= 1
+		return
 	}
-	l.mask = sz - 2
-	src, l.items = l.items, make([]item[K, V], sz)
+again:
+	sz <<= 1
+	l.mask = sz - 1
+	l.items = make([]item[K, V], sz+1)
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		if !l.insert(l.hash(key), key, src[i].value) {
-			// TODO: grow again instead of panicking
-			panic("recursive grow calls")
+			// the chances for this to happen are low, on a astronomic scale
+			// unless the hash function is really bad.
+			if l.h < sz {
+				l.h <<= 1
+			}
+			goto again
 		}
 	}
 }
@@ -291,7 +298,7 @@ func (l *LRU[K, V]) Evict(evict func(K, V) bool) {
 		if i == 0 || !evict(l.items[i].key, l.items[i].value) {
 			return
 		}
-		l.del(i)
+		l.del(l.idx(l.hash(l.items[i].key)), i)
 	}
 }
 
@@ -307,5 +314,3 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 }
 
 func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(len(l.items)-1) }
-
-// func (l *LRU[K, V]) Load() float64 { return float64(len(l.items) - 1) }
