@@ -108,8 +108,8 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	free := h
 	for ; l.items[free].isSet(); free = l.next(free) {
 	}
-shift:
-	if dist := l.dist(free, h); dist < l.h {
+again:
+	if dist := l.dist(h, free); dist < l.h {
 		// free slot within range of home slot, insert item @l.items[i].free
 		it := &l.items[free]
 		it.key = key
@@ -118,26 +118,24 @@ shift:
 		l.toFront(free)
 		return true
 	}
-	// loop back from farthest possible bucket
+	// shift the free slot up
 	for h := l.idxSub(free, l.h-1); h != free; h = l.next(h) {
-		if i := l.items[h].bHead; i > 0 && l.dist(free, i) < l.h {
-			// move s to free
-			s := &l.items[i]
-			d := &l.items[free]
-			d.key = s.key
-			d.value = s.value
-			prev, next := s.prev, s.next
-			d.prev, d.next = prev, next
-			l.items[prev].next, l.items[next].prev = free, free
-			d.bNext = s.bNext
-			// DO NOT UPDATE d.bHead
-			l.items[h].bHead = free
-			// just mark i as free. key and value will be overwritten later
-			l.items[i].bNext = 0
-			free = i
-			goto shift
+		// for a bucket b within [h, free) to be moveable, its home bucket must reside
+		// within the same range, so we use h.bHead to find candidates.
+		// This is not necessarily the optimal move, however going through the list to find
+		// the candidate farthest away from the free slot would be too costly.
+		if b := l.items[h].bHead; b > 0 && l.dist(b, free) < l.h {
+			l.move(h, free, b)
+			free = b
+			goto again
 		}
 	}
+	// on the off chance that we did move some items around but insert still failed,
+	// properly clear items[free]
+	var zeroK K
+	var zeroV V
+	l.items[free].key = zeroK
+	l.items[free].value = zeroV
 	return false
 }
 
@@ -150,9 +148,24 @@ func (l *LRU[K, V]) addToBucket(h int, free int) {
 	l.items[free].bNext = head
 }
 
+func (l *LRU[K, V]) move(h, d, s int) {
+	sb := &l.items[s]
+	db := &l.items[d]
+	db.key = sb.key
+	db.value = sb.value
+	prev, next := sb.prev, sb.next
+	db.prev, db.next = prev, next
+	l.items[prev].next, l.items[next].prev = d, d
+	db.bNext = sb.bNext
+	// DO NOT UPDATE d.bHead
+	l.items[h].bHead = d
+	// just mark s as free, the caller should handle clearing key and value
+	l.items[s].bNext = 0
+}
+
 func (l *LRU[K, V]) dist(i, j int) int {
-	// i > j, or i wrapped around
-	return (i - j) & l.mask
+	// j > i, or j wrapped around
+	return (j - i) & l.mask
 }
 
 func (l *LRU[K, V]) find(i int, key K) int {
@@ -200,13 +213,11 @@ func (l *LRU[K, V]) Delete(key K) {
 
 func (l *LRU[K, V]) del(h, i int) {
 	l.unlink(i)
-	// find previous item in bucket
 	var (
 		zeroK K
 		zeroV V
 		it    = &l.items[i]
 	)
-	l.count--
 	it.key, it.value = zeroK, zeroV
 	// leave it.bHead alone
 	// update bucket chain
@@ -217,8 +228,8 @@ func (l *LRU[K, V]) del(h, i int) {
 	}
 	*p = next
 	// if l.items[i] was the last bucket of the chain, we'll
-	// have l.items[h].bHead = -1. We do not check this as this
-	// is not an issue.
+	// have l.items[h].bHead = -1, which is not an issue.
+	l.count--
 }
 
 func (l *LRU[K, V]) unlinkBucket(h, i int) {
