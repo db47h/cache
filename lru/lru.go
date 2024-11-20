@@ -23,7 +23,11 @@
 // called whenever a new item is inserted into the cache.
 package lru
 
-import "math/bits"
+import (
+	"fmt"
+	"math/bits"
+	"os"
+)
 
 // LRU represents a Least Recent Used hash table.
 type LRU[K comparable, V any] struct {
@@ -33,7 +37,7 @@ type LRU[K comparable, V any] struct {
 	items []item[K, V]
 	count int
 	mask  int
-	h     uint32
+	h     int
 }
 
 type item[K comparable, V any] struct {
@@ -41,13 +45,13 @@ type item[K comparable, V any] struct {
 	value V
 	prev  int
 	next  int
-	bits  uint32
-	home  uint32
+	bNext int // next bucket where items[n].bHome == tems[items[n].bNext].bHome
+	bHome int
+	bHead int // first bucket for which hash(items[items[n].bHead].key)%len(items) == n
 }
 
 func (i *item[K, V]) isSet() bool {
-	// free buckets have both home and bits[0] == 0
-	return i.home|i.bits&1 != 0
+	return i.bHome != 0
 }
 
 // minimal table size: head/tail node + 7 items + 1 free cell
@@ -65,7 +69,7 @@ func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict fun
 		mask:    size - 1,
 		hash:    hash,
 		onEvict: onEvict,
-		h:       32,
+		h:       64,
 	}
 	return l
 }
@@ -76,7 +80,7 @@ func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU
 
 func (l *LRU[K, V]) Set(key K, value V) {
 	hash := l.hash(key)
-	if i, ok := l.find(l.idx(hash), key); ok {
+	if i := l.find(l.idx(hash), key); i != 0 {
 		l.unlink(i)
 		l.toFront(i)
 		l.items[i].key = key
@@ -107,34 +111,37 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	for ; l.items[free].isSet(); free = l.next(free) {
 	}
 shift:
-	if dist := (free - h + l.mask + 1) & l.mask; dist < int(l.h) {
+	if dist := l.dist(free, h); dist < l.h {
 		// free slot within range of home slot, insert item @l.items[i].free
 		it := &l.items[free]
 		it.key = key
 		it.value = value
-		it.home = uint32(dist)
-		l.setHomeBit(h, uint32(dist))
+		l.addToBucket(h, free)
 		l.toFront(free)
 		return true
 	}
-	idx := l.idxHome(free, l.h-1)
 	// loop back from farthest possible bucket
-	for i, hmax := idx, uint32(1); i != free; i, hmax = l.next(i), hmax+1 {
-		// hmax represents how far an item can be from its home position
-		// in order to be movable
-		if l.items[i].home < hmax {
+	for i := l.idxHome(free, l.h-1); i != free; i = l.next(i) {
+		if l.dist(free, l.items[i].bHome) < l.h {
 			// move i to free
-			f := &l.items[free]
-			it := &l.items[i]
-			f.key = it.key
-			f.value = it.value
-			f.prev = it.prev
-			f.next = it.next
-			f.home = it.home + l.h - hmax
-			l.items[f.prev].next = free
-			l.items[f.next].prev = free
-			l.setHomeBit(l.idxHome(free, f.home), f.home)
-			l.clear(i)
+			s := &l.items[i]
+			d := &l.items[free]
+			d.key = s.key
+			d.value = s.value
+			prev, next := s.prev, s.next
+			d.prev, d.next = prev, next
+			l.items[prev].next, l.items[next].prev = free, free
+			d.bHome = s.bHome
+			d.bNext = s.bNext
+			// DO NOT UPDATE d.bHead
+			// find i in bucket chain, replace by free
+			p := &l.items[d.bHome].bHead
+			for ; *p != i; p = &l.items[*p].bNext {
+			}
+			*p = free
+			// mark i as free. key and value will be overwritten later
+			l.items[i].bHome = 0
+			l.items[i].bNext = 0
 			free = i
 			goto shift
 		}
@@ -142,24 +149,23 @@ shift:
 	return false
 }
 
-func (l *LRU[K, V]) setHomeBit(h int, dist uint32) {
-	l.items[h].bits |= uint32(1) << uint32(dist)
+func (l *LRU[K, V]) addToBucket(h int, i int) {
+	l.items[h].bHead, l.items[i].bNext = i, l.items[h].bHead
+	l.items[i].bHome = h
 }
 
-func (l *LRU[K, V]) find(i int, key K) (int, bool) {
-	b := l.items[i].bits
-	for b != 0 {
-		n := bits.TrailingZeros32(b)
-		i = (i-1+n)&l.mask + 1
+func (l *LRU[K, V]) dist(i, j int) int {
+	// i > j, or i wrapped around
+	return (i - j) & l.mask
+}
+
+func (l *LRU[K, V]) find(i int, key K) int {
+	for i = l.items[i].bHead; i != 0; i = l.items[i].bNext {
 		if l.items[i].key == key {
-			return i, true
+			return i
 		}
-		// if rhs is a signed type, Go will check if rhs < 0 and panic if true.
-		// so we convert rhs to uint in order to prevent this check
-		b >>= uint8(n + 1)
-		i++
 	}
-	return i, false
+	return 0
 }
 
 func (l *LRU[K, V]) idx(hash uint64) int {
@@ -171,8 +177,8 @@ func (l *LRU[K, V]) next(i int) int {
 	return (i & l.mask) + 1
 }
 
-func (l *LRU[K, V]) idxHome(i int, h uint32) int {
-	return (i-int(h)+l.mask)&l.mask + 1
+func (l *LRU[K, V]) idxHome(i int, h int) int {
+	return (i-h+l.mask)&l.mask + 1
 }
 
 func (l *LRU[K, V]) Size() int {
@@ -180,7 +186,7 @@ func (l *LRU[K, V]) Size() int {
 }
 
 func (l *LRU[K, V]) Get(key K) (V, bool) {
-	if i, ok := l.find(l.idx(l.hash(key)), key); ok {
+	if i := l.find(l.idx(l.hash(key)), key); i != 0 {
 		l.unlink(i)
 		l.toFront(i)
 		return l.items[i].value, true
@@ -190,28 +196,32 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 }
 
 func (l *LRU[K, V]) Delete(key K) {
-	if i, ok := l.find(l.idx(l.hash(key)), key); ok {
+	if i := l.find(l.idx(l.hash(key)), key); i != 0 {
 		l.del(i)
 	}
 }
 
 func (l *LRU[K, V]) del(i int) {
 	l.unlink(i)
-	l.clear(i)
-	l.count--
-}
-
-func (l *LRU[K, V]) clear(i int) {
+	// find previous item in bucket
 	var (
 		zeroK K
 		zeroV V
 		it    = &l.items[i]
 	)
-	it.key = zeroK
-	it.value = zeroV
-	h := l.idxHome(i, it.home)
-	l.items[h].bits &= ^(uint32(1) << it.home)
-	it.home = 0
+	it.key, it.value = zeroK, zeroV
+	// update bucket chain
+	p := &l.items[it.bHome].bHead
+	for ; *p != i; p = &l.items[*p].bNext {
+	}
+	*p = it.bNext
+	it.bHome = 0
+	it.bNext = 0
+	// leave it.bHead alone
+	l.count--
+}
+
+func (l *LRU[K, V]) unlinkBucket(h, i int) {
 }
 
 func (l *LRU[K, V]) unlink(i int) {
@@ -231,8 +241,14 @@ func (l *LRU[K, V]) toFront(i int) {
 
 // grow resizes the hash table to the next power of 2 + 1
 func (l *LRU[K, V]) grow() {
+	// TODO: this is a good spot to grow l.h
+	// for example if we need to grow the table with a load factor < 0.5
 	var src []item[K, V]
 	sz := (l.mask+1)*2 + 1
+	fmt.Fprintf(os.Stderr, "grow %d -> %d, load: %f, H: %d\n", sz/2, sz, l.Load(), l.h)
+	if l.Load() < 0.75 {
+		l.h <<= 1
+	}
 	l.mask = sz - 2
 	src, l.items = l.items, make([]item[K, V], sz)
 	for i := src[0].prev; i != 0; i = src[i].prev {

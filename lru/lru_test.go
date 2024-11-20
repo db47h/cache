@@ -25,7 +25,7 @@ var td = []struct {
 }
 
 func populate() *lru.LRU[string, int] {
-	l := lru.New[string, int](hash.String(), nil)
+	l := lru.New[string, int](func(s string) uint64 { return uint64(s[0]) }, nil)
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -218,6 +218,7 @@ func bench_LRU_int_int(hitp int, b *testing.B) {
 			l.Set(i, i)
 		}
 	}
+	b.Log(l.Load())
 }
 
 func Benchmark_LRU_string_string_90(b *testing.B) {
