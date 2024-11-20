@@ -81,7 +81,6 @@ func (l *LRU[K, V]) Set(key K, value V) {
 	if i := l.find(l.idx(hash), key); i != 0 {
 		l.unlink(i)
 		l.toFront(i)
-		l.items[i].key = key
 		l.items[i].value = value
 		if l.onEvict != nil {
 			l.Evict(l.onEvict)
