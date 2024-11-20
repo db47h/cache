@@ -23,6 +23,8 @@
 // called whenever a new item is inserted into the cache.
 package lru
 
+import "math/bits"
+
 // LRU represents a Least Recent Used hash table.
 type LRU[K comparable, V any] struct {
 	hash    func(K) uint64
@@ -41,16 +43,27 @@ type item[K comparable, V any] struct {
 	psl   int
 }
 
-func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
+// minimal table size: head/tail node + 7 items + 1 free cell
+// anything lower may lead to a load factor = 1; depending on growth rules in Set()
+const MinSize = 8
+
+func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
+	if size < MinSize {
+		size = MinSize
+	}
+	b := bits.UintSize - bits.LeadingZeros(uint(size)-1)
+	size = 1 << b
 	l := &LRU[K, V]{
-		// minimal table size: head/tail node + 7 items + 1 free cell
-		// anything lower may lead to a load factor = 1; depending on growth rules in Set()
-		items:   make([]item[K, V], 9),
-		mask:    7,
+		items:   make([]item[K, V], size+1),
+		mask:    size - 1,
 		hash:    hash,
 		onEvict: onEvict,
 	}
 	return l
+}
+
+func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
+	return NewWithSize(0, hash, onEvict)
 }
 
 func (l *LRU[K, V]) Set(key K, value V) {

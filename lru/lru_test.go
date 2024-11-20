@@ -209,10 +209,7 @@ func Benchmark_LRU_int_int_50(b *testing.B) {
 func bench_LRU_int_int(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[int, int]
-	l = lru.New(
-		hash.Number[int](),
-		func(int, int) bool { return l.Size() > maxItemCount })
-
+	l = lru.NewWithSize(maxItemCount, hash.Number[int](), func(int, int) bool { return l.Size() > maxItemCount })
 	sampleSize := maxItemCount * 100 / hitp
 	b.ResetTimer()
 	for range b.N {
@@ -238,7 +235,7 @@ func Benchmark_LRU_string_string_50(b *testing.B) {
 func bench_LRU_string_string(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[string, string]
-	l = lru.New(hash.String(), func(string, string) bool { return l.Size() > maxItemCount })
+	l = lru.NewWithSize(maxItemCount, hash.String(), func(string, string) bool { return l.Size() > maxItemCount })
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	b.ResetTimer()
@@ -306,7 +303,7 @@ func Benchmark_map_string_string_50(b *testing.B) {
 
 func bench_map_string_string(hitp int, b *testing.B) {
 	xo := New64S()
-	l := make(map[string]string, maxItemCount)
+	l := make(map[string]string, 8)
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	// prefill
