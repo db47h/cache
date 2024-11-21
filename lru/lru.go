@@ -43,10 +43,11 @@ type item[K comparable, V any] struct {
 	next  int
 	// first bucket for which hash(items[items[n].bHead].key)%len(items) == n
 	bHead int
-	// next bucket where items[n].bHome == tems[items[n].bNext].bHome.
+	// next bucket within the same neighborhood
 	// if items[n].bNext == -1 => bucket n is the last element of the list
 	// if items[n].bNext == 0 => bucket n is free
 	bNext int
+	// bHead and bNext do not necessarily refer to the same virtual bucket.
 }
 
 func (i *item[K, V]) isSet() bool {
@@ -87,10 +88,6 @@ func (l *LRU[K, V]) Set(key K, value V) {
 		}
 		return
 	}
-	// we need at least one free slot
-	if l.count >= len(l.items)-1 {
-		l.grow()
-	}
 	for !l.insert(hash, key, value) {
 		l.grow()
 	}
@@ -105,7 +102,12 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	h := l.idx(hash)
 	// find a free slot
 	free := h
-	for ; l.items[free].isSet(); free = l.next(free) {
+	// TODO: adjust maxdist based on probability to find a free slot with ɑ=0.9
+	maxDist := len(l.items) >> 1
+	for dist := 0; l.items[free].isSet(); free, dist = l.next(free), dist+1 {
+		if dist > maxDist {
+			return false
+		}
 	}
 again:
 	if dist := l.dist(h, free); dist < l.h {
