@@ -147,6 +147,9 @@ func (l *LRU[K, V]) addToBucket(h int, free int) {
 	l.items[free].bNext = head
 }
 
+// move moves bucket s to d within h's neighborhood.
+//   - s must be h.bHead
+//   - s is marked as free but s.key and s.value are not cleared
 func (l *LRU[K, V]) move(h, d, s int) {
 	sb := &l.items[s]
 	db := &l.items[d]
@@ -154,12 +157,12 @@ func (l *LRU[K, V]) move(h, d, s int) {
 	db.value = sb.value
 	prev, next := sb.prev, sb.next
 	db.prev, db.next = prev, next
-	l.items[prev].next, l.items[next].prev = d, d
 	db.bNext = sb.bNext
 	// DO NOT UPDATE d.bHead
+	// Mark s as free, the caller should handle clearing key and value
+	sb.bNext = 0
 	l.items[h].bHead = d
-	// just mark s as free, the caller should handle clearing key and value
-	l.items[s].bNext = 0
+	l.items[prev].next, l.items[next].prev = d, d
 }
 
 func (l *LRU[K, V]) dist(i, j int) int {
