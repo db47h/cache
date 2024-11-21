@@ -216,17 +216,16 @@ func (l *LRU[K, V]) Delete(key K) {
 }
 
 func (l *LRU[K, V]) del(h, i int) {
-	l.unlink(i)
 	var (
 		zeroK K
 		zeroV V
-		it    = &l.items[i]
 	)
-	it.key, it.value = zeroK, zeroV
-	// leave it.bHead alone
+	l.unlink(i)
+	l.items[i].key, l.items[i].value = zeroK, zeroV
+	// leave l.items[i].bHead alone
 	// update bucket chain
-	next := it.bNext
-	it.bNext = 0
+	next := l.items[i].bNext
+	l.items[i].bNext = 0
 	p := &l.items[h].bHead
 	for ; *p != i; p = &l.items[*p].bNext {
 	}
