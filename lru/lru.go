@@ -54,13 +54,21 @@ func (i *item[K, V]) isSet() bool {
 	return i.bNext != 0
 }
 
-// minimal table size: 7 items + 1 free cell
-const MinSize = 8
+const (
+	// minimal table size: 7 items + 1 free cell
+	minSize = 8
+	minH    = 8
+	// Load factor at which the table size will actually be reallocated. When an insertion fails,
+	// if the load factor is below this threshold, the virtual bucket size will be increased instead of
+	// allocating more memory.
+	DefaultReallocThreshold = 0.9
+)
 
 func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
-	if size < MinSize {
-		size = MinSize
+	if size < minSize {
+		size = minSize
 	}
+	// next power of two. Ignore 0 since size > 0 at this point.
 	b := bits.UintSize - bits.LeadingZeros(uint(size)-1)
 	size = 1 << b
 	return &LRU[K, V]{
@@ -69,7 +77,7 @@ func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict fun
 		mask:    size - 1,
 		hash:    hash,
 		onEvict: onEvict,
-		h:       MinSize,
+		h:       minH,
 	}
 }
 
@@ -102,7 +110,7 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	h := l.idx(hash)
 	// find a free slot
 	free := h
-	// TODO: adjust maxdist based on probability to find a free slot with ɑ=0.9
+	// TODO: adjust maxdist based on probability to find a free slot with ɑ=DefaultReallocThreshold
 	maxDist := len(l.items) >> 1
 	for dist := 0; l.items[free].isSet(); free, dist = l.next(free), dist+1 {
 		if dist > maxDist {
@@ -259,8 +267,8 @@ func (l *LRU[K, V]) grow() {
 	src := l.items
 	// We should be able to achieve load factors above 0.9 with H between 64 and 128 and decent hash functions
 	// Below that, either H is too low, or the hash function is bad.
-	// if ɑ < 0.9, try to increase H first as this does not require re-hashing.
-	if l.Load() < 0.9 && l.h < sz {
+	// if ɑ < DefaultGrowThreshold, try to increase H first as this does not require re-hashing.
+	if l.Load() < DefaultReallocThreshold && l.h < sz {
 		l.h <<= 1
 		return
 	}
@@ -268,6 +276,8 @@ again:
 	sz <<= 1
 	l.mask = sz - 1
 	l.items = make([]item[K, V], sz+1)
+	// since we actually grow the table, we might as well reset H
+	l.h = minH
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		if !l.insert(l.hash(key), key, src[i].value) {
