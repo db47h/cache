@@ -25,7 +25,7 @@ var td = []struct {
 }
 
 func populate() *lru.LRU[string, int] {
-	l := lru.New[string, int](hash.String(), nil)
+	l := lru.NewLRU[string, int](hash.String(), nil)
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -59,7 +59,7 @@ func TestLRU_Set(t *testing.T) {
 
 func TestLRU_Set_onEvict(t *testing.T) {
 	var l *lru.LRU[string, int]
-	l = lru.New(hash.String(), func(string, int) bool { return l.Size() > 2 })
+	l = lru.NewLRU(hash.String(), func(string, int) bool { return l.Size() > 2 })
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -209,7 +209,7 @@ func Benchmark_LRU_int_int_50(b *testing.B) {
 func bench_LRU_int_int(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[int, int]
-	l = lru.NewWithSize(maxItemCount, hash.Number[int](), func(int, int) bool { return l.Size() > maxItemCount })
+	l = lru.NewLRU(hash.Number[int](), func(int, int) bool { return l.Size() > maxItemCount }, lru.Capacity(maxItemCount))
 	sampleSize := maxItemCount * 100 / hitp
 	b.ResetTimer()
 	for range b.N {
@@ -235,7 +235,7 @@ func Benchmark_LRU_string_string_50(b *testing.B) {
 func bench_LRU_string_string(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[string, string]
-	l = lru.NewWithSize(maxItemCount, hash.String(), func(string, string) bool { return l.Size() > maxItemCount })
+	l = lru.NewLRU(hash.String(), func(string, string) bool { return l.Size() > maxItemCount }, lru.Capacity(maxItemCount))
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	b.ResetTimer()

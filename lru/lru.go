@@ -23,8 +23,6 @@
 // called whenever a new item is inserted into the cache.
 package lru
 
-import "math/bits"
-
 // LRU represents a Least Recently Used hash table.
 type LRU[K comparable, V any] struct {
 	hash    func(K) uint64
@@ -34,6 +32,7 @@ type LRU[K comparable, V any] struct {
 	count int
 	mask  int
 	h     int
+	aMax  float64
 }
 
 type item[K comparable, V any] struct {
@@ -55,34 +54,30 @@ func (i *item[K, V]) isSet() bool {
 }
 
 const (
-	// minimal table size: 7 items + 1 free cell
+	// Minimal table size: 8 items
 	minSize = 8
-	minH    = 8
+	// Default bucket size
+	defaultH = 8
 	// Load factor at which the table size will actually be reallocated. When an insertion fails,
 	// if the load factor is below this threshold, the virtual bucket size will be increased instead of
 	// allocating more memory.
 	DefaultReallocThreshold = 0.9
 )
 
-func NewWithSize[K comparable, V any](size int, hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
-	if size < minSize {
-		size = minSize
-	}
-	// next power of two. Ignore 0 since size > 0 at this point.
-	b := bits.UintSize - bits.LeadingZeros(uint(size)-1)
-	size = 1 << b
-	return &LRU[K, V]{
-		// size + 1 for head/tail node at items[0]
-		items:   make([]item[K, V], size+1),
-		mask:    size - 1,
-		hash:    hash,
-		onEvict: onEvict,
-		h:       minH,
-	}
+func NewLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts ...Option) *LRU[K, V] {
+	return newLRU(hash, onEvict, getOpts(opts))
 }
 
-func New[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool) *LRU[K, V] {
-	return NewWithSize(0, hash, onEvict)
+func newLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts *option) *LRU[K, V] {
+	return &LRU[K, V]{
+		// size + 1 for head/tail node at items[0]
+		items:   make([]item[K, V], opts.capacity+1),
+		mask:    opts.capacity - 1,
+		hash:    hash,
+		onEvict: onEvict,
+		h:       min(defaultH, opts.capacity),
+		aMax:    opts.reallocThreshold,
+	}
 }
 
 func (l *LRU[K, V]) Set(key K, value V) {
@@ -264,20 +259,20 @@ func (l *LRU[K, V]) toFront(i int) {
 // grow resizes the hash table to the next power of 2 + 1
 func (l *LRU[K, V]) grow() {
 	sz := len(l.items) - 1
-	src := l.items
 	// We should be able to achieve load factors above 0.9 with H between 64 and 128 and decent hash functions
 	// Below that, either H is too low, or the hash function is bad.
-	// if ɑ < DefaultGrowThreshold, try to increase H first as this does not require re-hashing.
-	if l.Load() < DefaultReallocThreshold && l.h < sz {
+	// if ɑ < aMax, try to increase H first as this does not require re-hashing.
+	if l.Load() < l.aMax && l.h < sz && l.count < sz {
 		l.h <<= 1
 		return
 	}
+	src := l.items
 again:
 	sz <<= 1
 	l.mask = sz - 1
 	l.items = make([]item[K, V], sz+1)
 	// since we actually grow the table, we might as well reset H
-	l.h = minH
+	l.h = min(defaultH, sz)
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		if !l.insert(l.hash(key), key, src[i].value) {

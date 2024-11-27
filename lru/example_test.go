@@ -28,7 +28,7 @@ type HttpCache struct {
 func NewHttpCache(capacity int) *HttpCache {
 	seed := maphash.MakeSeed()
 	c := new(HttpCache)
-	c.lru = lru.New(
+	c.lru = lru.NewLRU(
 		func(s string) uint64 { return maphash.String(seed, s) },
 		c.onEvict)
 	c.cap = int64(capacity)
