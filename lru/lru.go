@@ -106,7 +106,8 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	// find a free slot
 	free := h
 	// TODO: adjust maxdist based on probability to find a free slot with ɑ=DefaultReallocThreshold
-	maxDist := len(l.items) >> 1
+	// consider l.h if we somehow end up in a situation where l.h is close to len(l.items)
+	maxDist := max(len(l.items)>>1, l.h)
 	for dist := 0; l.items[free].isSet(); free, dist = l.next(free), dist+1 {
 		if dist > maxDist {
 			return false
@@ -266,22 +267,24 @@ func (l *LRU[K, V]) grow() {
 		l.h <<= 1
 		return
 	}
-	src := l.items
-again:
+
 	sz <<= 1
 	l.mask = sz - 1
+	src := l.items
 	l.items = make([]item[K, V], sz+1)
 	// since we actually grow the table, we might as well reset H
 	l.h = min(defaultH, sz)
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
-		if !l.insert(l.hash(key), key, src[i].value) {
-			// the chances for this to happen are low, on a astronomic scale
-			// unless the hash function is really bad.
-			if l.h < sz {
-				l.h <<= 1
+		for !l.insert(l.hash(key), key, src[i].value) {
+			// keep retrying with larger H: at this point, we've already resized the table,
+			// there should be enough room for new items.
+			if l.h >= sz {
+				// unreachable unless we have reached the maximum table size
+				panic("maximum table size reached")
 			}
-			goto again
+			l.h <<= 1
+			println(l.h)
 		}
 	}
 }
