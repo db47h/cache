@@ -1,9 +1,5 @@
 package lru
 
-import (
-	"math/bits"
-)
-
 type Option interface {
 	set(*option)
 }
@@ -15,18 +11,29 @@ func (f optFunc) set(o *option) {
 }
 
 type option struct {
-	reallocThreshold float64
-	capacity         int
+	growthRatio   float64
+	maxLoadFactor float64
+	capacity      int
 
 	// TODO
-	// allocThreshold   float64
 	// maxprocs         int
 }
 
+const (
+	// See GrowthMultiplier. With a MaxLoadFactor at 0.9, this is equivalent to maintaining the load factor at 0.9/1.5 = 0.6 when growing the table.
+	DefaultGrowthMultiplier = 1.5
+	// See MaxLoadFactor. We should be able to achieve load factors around 0.9 with H between 64 and 128 and a decent hash function.
+	DefaultMaxLoadFactor = 0.9
+	// Minimal value for GrowthRatio. This is a very aggressive value: for MaxLoadFactor = 0.9, this corresponds to a load factor
+	// of 0.8 after reallocating the table.
+	MinGrowthRatio = 1.125
+)
+
 func getOpts(opts []Option) *option {
 	o := &option{
-		reallocThreshold: DefaultReallocThreshold,
-		capacity:         minSize,
+		growthRatio:   DefaultGrowthMultiplier,
+		maxLoadFactor: DefaultMaxLoadFactor,
+		capacity:      minSize,
 	}
 	for _, op := range opts {
 		op.set(o)
@@ -34,23 +41,20 @@ func getOpts(opts []Option) *option {
 	return o
 }
 
-func ReallocThreshold(t float64) Option {
-	if t < 0 || 1 <= t {
-		panic("ReallocThreshold out of range [0, 1)")
-	}
+func GrowthRatio(m float64) Option {
 	return optFunc(func(o *option) {
-		o.reallocThreshold = t
+		o.growthRatio = m
+	})
+}
+
+func MaxLoadFactor(t float64) Option {
+	return optFunc(func(o *option) {
+		o.maxLoadFactor = t
 	})
 }
 
 func Capacity(cap int) Option {
 	return optFunc(func(o *option) {
-		if cap < minSize {
-			cap = minSize
-		}
-		// next power of two. Ignore 0 since cap > 0 at this point.
-		b := bits.UintSize - bits.LeadingZeros(uint(cap)-1)
-		cap = 1 << b
 		o.capacity = cap
 	})
 }

@@ -23,16 +23,18 @@
 // called whenever a new item is inserted into the cache.
 package lru
 
+import "math/bits"
+
 // LRU represents a Least Recently Used hash table.
 type LRU[K comparable, V any] struct {
 	hash    func(K) uint64
 	onEvict func(K, V) bool
 
-	items []item[K, V]
-	count int
-	mask  int
-	h     int
-	aMax  float64
+	items  []item[K, V]
+	count  int
+	h      int
+	gRatio float64
+	aMax   float64
 }
 
 type item[K comparable, V any] struct {
@@ -40,13 +42,16 @@ type item[K comparable, V any] struct {
 	value V
 	prev  int
 	next  int
+	// virtual bucket information. Instead of storing offsets, we store bucket
+	// indices.
+	// bHead and bNext do not necessarily refer to the same virtual bucket.
+	//
 	// first bucket for which hash(items[items[n].bHead].key)%len(items) == n
 	bHead int
 	// next bucket within the same neighborhood
 	// if items[n].bNext == -1 => bucket n is the last element of the list
 	// if items[n].bNext == 0 => bucket n is free
 	bNext int
-	// bHead and bNext do not necessarily refer to the same virtual bucket.
 }
 
 func (i *item[K, V]) isSet() bool {
@@ -54,14 +59,8 @@ func (i *item[K, V]) isSet() bool {
 }
 
 const (
-	// Minimal table size: 8 items
-	minSize = 8
-	// Default bucket size
-	defaultH = 8
-	// Load factor at which the table size will actually be reallocated. When an insertion fails,
-	// if the load factor is below this threshold, the virtual bucket size will be increased instead of
-	// allocating more memory.
-	DefaultReallocThreshold = 0.9
+	minSize  = 8 // Minimal table size: 7 items + 1 head/tail node
+	defaultH = 4 // Default bucket size. Keep this at an exponent of 2 below minSize
 )
 
 func NewLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts ...Option) *LRU[K, V] {
@@ -69,14 +68,23 @@ func NewLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, o
 }
 
 func newLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts *option) *LRU[K, V] {
+	if opts.growthRatio < MinGrowthRatio {
+		panic("GrowthRatio < MinGrowthRatio")
+	}
+	if t := opts.maxLoadFactor; t < 0 || 1 < t {
+		panic("MaxLoadFactor out of range [0, 1]")
+	}
+	sz := opts.capacity
+	if sz < minSize {
+		sz = minSize
+	}
 	return &LRU[K, V]{
-		// size + 1 for head/tail node at items[0]
-		items:   make([]item[K, V], opts.capacity+1),
-		mask:    opts.capacity - 1,
+		items:   make([]item[K, V], sz),
 		hash:    hash,
 		onEvict: onEvict,
-		h:       min(defaultH, opts.capacity),
-		aMax:    opts.reallocThreshold,
+		h:       defaultH,
+		gRatio:  opts.growthRatio,
+		aMax:    opts.maxLoadFactor,
 	}
 }
 
@@ -107,15 +115,15 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	free := h
 	// TODO: adjust maxdist based on probability to find a free slot with ɑ=DefaultReallocThreshold
 	// consider l.h if we somehow end up in a situation where l.h is close to len(l.items)
-	maxDist := max(len(l.items)>>1, l.h)
+	maxDist := max(l.size()<<1, l.h)
 	for dist := 0; l.items[free].isSet(); free, dist = l.next(free), dist+1 {
-		if dist > maxDist {
+		if dist >= maxDist {
 			return false
 		}
 	}
 again:
 	if dist := l.dist(h, free); dist < l.h {
-		// free slot within range of home slot, insert item @l.items[i].free
+		// the free slot is within range of the home slot, insert item @l.items[free]
 		it := &l.items[free]
 		it.key = key
 		it.value = value
@@ -123,7 +131,7 @@ again:
 		l.toFront(free)
 		return true
 	}
-	// shift the free slot up
+	// shift the free slot closer to home bucket
 	for h := l.idxSub(free, l.h-1); h != free; h = l.next(h) {
 		// for a bucket b within [h, free) to be moveable, its home bucket must reside
 		// within the same range, so we use h.bHead to find candidates.
@@ -173,8 +181,14 @@ func (l *LRU[K, V]) move(h, d, s int) {
 
 func (l *LRU[K, V]) dist(i, j int) int {
 	// j > i, or j wrapped around
-	return (j - i) & l.mask
+	d := j - i
+	if d < 0 {
+		d += l.size()
+	}
+	return d
 }
+
+func (l *LRU[K, V]) size() int { return len(l.items) - 1 }
 
 func (l *LRU[K, V]) find(i int, key K) int {
 	for i = l.items[i].bHead; i > 0; i = l.items[i].bNext {
@@ -185,20 +199,34 @@ func (l *LRU[K, V]) find(i int, key K) int {
 	return 0
 }
 
+// idx returns the index for the given hash in l.items. Note that the index is 1 based
+// and should be in the interval [1, len(l.items)-1].
+// Instead of returning hash % size + 1, we use the faster mapping function
+// described here: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
+// modified to work with 32 and 64 bits numbers.
 func (l *LRU[K, V]) idx(hash uint64) int {
-	// indices range from 1 -> len(items)-1, items[0] is the head/tail item
-	return (int(hash) & l.mask) + 1
+	hi, _ := bits.Mul(uint(hash), uint(l.size()))
+	return int(hi) + 1
 }
 
+// next returns the index in l.items that follows i.
 func (l *LRU[K, V]) next(i int) int {
-	return (i & l.mask) + 1
+	n := i + 1
+	if n >= len(l.items) {
+		n -= len(l.items) - 1
+	}
+	return n
 }
 
 func (l *LRU[K, V]) idxSub(i int, j int) int {
-	return (i-j+l.mask)&l.mask + 1
+	i -= j
+	if i <= 0 {
+		i += l.size()
+	}
+	return i
 }
 
-func (l *LRU[K, V]) Size() int {
+func (l *LRU[K, V]) Len() int {
 	return l.count
 }
 
@@ -239,9 +267,6 @@ func (l *LRU[K, V]) del(h, i int) {
 	l.count--
 }
 
-func (l *LRU[K, V]) unlinkBucket(h, i int) {
-}
-
 func (l *LRU[K, V]) unlink(i int) {
 	next := l.items[i].next
 	prev := l.items[i].prev
@@ -257,34 +282,34 @@ func (l *LRU[K, V]) toFront(i int) {
 	l.items[next].prev = i
 }
 
-// grow resizes the hash table to the next power of 2 + 1
+// grow resizes the hash table.
 func (l *LRU[K, V]) grow() {
-	sz := len(l.items) - 1
-	// We should be able to achieve load factors above 0.9 with H between 64 and 128 and decent hash functions
-	// Below that, either H is too low, or the hash function is bad.
+	sz := l.size()
 	// if ɑ < aMax, try to increase H first as this does not require re-hashing.
 	if l.Load() < l.aMax && l.h < sz && l.count < sz {
 		l.h <<= 1
 		return
 	}
-
-	sz <<= 1
-	l.mask = sz - 1
-	src := l.items
-	l.items = make([]item[K, V], sz+1)
+	sz++ // compute new size based on len(l.items)
+	newSize := max(int(float64(sz)*l.gRatio), minSize)
+	if newSize <= sz { // cheap overflow check
+		// this panic can be recovered from, with the LRU in a valid state.
+		panic("maximum table size overflow")
+	}
 	// since we actually grow the table, we might as well reset H
-	l.h = min(defaultH, sz)
+	l.h = defaultH
+	src := l.items
+	l.items = make([]item[K, V], newSize)
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		for !l.insert(l.hash(key), key, src[i].value) {
 			// keep retrying with larger H: at this point, we've already resized the table,
 			// there should be enough room for new items.
-			if l.h >= sz {
-				// unreachable unless we have reached the maximum table size
-				panic("maximum table size reached")
+			if l.h >= l.size() {
+				// since there is room for new items, with H = l.size, this should never happen
+				panic("unreachable")
 			}
-			l.h <<= 1
-			println(l.h)
+			l.h = min(l.h<<1, l.size())
 		}
 	}
 }
@@ -335,4 +360,4 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 	return l.items[i].key, l.items[i].value, i != 0
 }
 
-func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(len(l.items)-1) }
+func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(l.size()) }

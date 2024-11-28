@@ -34,8 +34,8 @@ func populate() *lru.LRU[string, int] {
 
 func TestLRU_Set(t *testing.T) {
 	l := populate()
-	if l.Size() != len(td) {
-		t.Fatalf("size mismatch: want %d, got %d", len(td), l.Size())
+	if l.Len() != len(td) {
+		t.Fatalf("size mismatch: want %d, got %d", len(td), l.Len())
 	}
 
 	// check item ordering
@@ -59,7 +59,7 @@ func TestLRU_Set(t *testing.T) {
 
 func TestLRU_Set_onEvict(t *testing.T) {
 	var l *lru.LRU[string, int]
-	l = lru.NewLRU(hash.String(), func(string, int) bool { return l.Size() > 2 })
+	l = lru.NewLRU(hash.String(), func(string, int) bool { return l.Len() > 2 })
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -68,8 +68,8 @@ func TestLRU_Set_onEvict(t *testing.T) {
 	// left.
 	expectedSize := 2
 
-	if l.Size() != expectedSize {
-		t.Fatalf("Size(): expected %d; got %d", expectedSize, l.Size())
+	if l.Len() != expectedSize {
+		t.Fatalf("Size(): expected %d; got %d", expectedSize, l.Len())
 	}
 
 	k, v, ok := l.MostRecent()
@@ -177,7 +177,7 @@ func TestLRU_Delete(t *testing.T) {
 	l := populate()
 
 	seed := time.Now().UnixNano()
-	for i := 0; i < 1000 && l.Size() > 0; i++ {
+	for i := 0; i < 1000 && l.Len() > 0; i++ {
 		j := xo.IntN(len(td))
 		l.Delete(td[j].key)
 		if _, ok := l.Get(td[j].key); ok {
@@ -189,7 +189,8 @@ func TestLRU_Delete(t *testing.T) {
 
 // aim for a load factor ~ 0.9
 const (
-	maxItemCount = (1 << 20) * 90 / 100
+	capacity     = 1 << 20
+	maxItemCount = capacity * 90 / 100
 )
 
 func Benchmark_LRU_int_int_90(b *testing.B) {
@@ -209,7 +210,11 @@ func Benchmark_LRU_int_int_50(b *testing.B) {
 func bench_LRU_int_int(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[int, int]
-	l = lru.NewLRU(hash.Number[int](), func(int, int) bool { return l.Size() > maxItemCount }, lru.Capacity(maxItemCount))
+	l = lru.NewLRU(
+		hash.Number[int](),
+		func(int, int) bool { return l.Len() > maxItemCount },
+		lru.Capacity(capacity),
+		lru.MaxLoadFactor(0.95))
 	sampleSize := maxItemCount * 100 / hitp
 	b.ResetTimer()
 	for range b.N {
@@ -235,7 +240,11 @@ func Benchmark_LRU_string_string_50(b *testing.B) {
 func bench_LRU_string_string(hitp int, b *testing.B) {
 	xo := New64S()
 	var l *lru.LRU[string, string]
-	l = lru.NewLRU(hash.String(), func(string, string) bool { return l.Size() > maxItemCount }, lru.Capacity(maxItemCount))
+	l = lru.NewLRU(
+		hash.String(),
+		func(string, string) bool { return l.Len() > maxItemCount },
+		lru.Capacity(capacity),
+		lru.MaxLoadFactor(0.95))
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	b.ResetTimer()
