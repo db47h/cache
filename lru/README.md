@@ -2,6 +2,19 @@
 
 [![Build Status][ci-img]][ci] [![Go Report Card][lint-img]][lint] [![Coverage Status][cover-img]][cover] [![GoDoc][godoc-img]][godoc]
 
+# Update
+
+**This readme refers to v1 of this package. V2 on the master branch is still a work in progress and should not be used yet**
+
+v2 features:
+
+- generic type LRU[K comparable, V any] with a leaner API to be used as a building block for more specialized caches
+- faster implementation (hopscotch hash table) with improved CPU cache locality.
+- fast concurrent implementation (with partial locking of the table), but the LRU property is only statistically correct.
+- Requires user provided hash functions, but the package provides decent ones for integers and strings (pulled from Go std).
+
+# about v1
+
 Package lru implements an LRU cache with variable item size and automatic item
 eviction.
 
