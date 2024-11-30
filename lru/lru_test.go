@@ -1,6 +1,7 @@
 package lru_test
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -188,33 +189,31 @@ func TestLRU_Delete(t *testing.T) {
 }
 
 // aim for a load factor ~ 0.9
-const (
-	capacity     = 1 << 20
-	maxItemCount = capacity * 90 / 100
-)
+const capacity = 1 << 20
 
-func Benchmark_LRU_int_int_90(b *testing.B) {
-	bench_LRU_int_int(90, b)
-}
-
-func Benchmark_LRU_int_int_75(b *testing.B) {
-	bench_LRU_int_int(75, b)
-}
-
-func Benchmark_LRU_int_int_50(b *testing.B) {
-	bench_LRU_int_int(50, b)
+func Benchmark_LRU_int_int(b *testing.B) {
+	lfs := []float64{.9, .8, .7}
+	hrs := []int{90, 75, 50}
+	for _, h := range hrs {
+		for _, lf := range lfs {
+			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
+				bench_LRU_int_int(lf, h, b)
+			})
+		}
+	}
 }
 
 // typical workload for a cache were we fetch entries and create one if not found
 // with the given hit ratio (expressed as hit%)
-func bench_LRU_int_int(hitp int, b *testing.B) {
+func bench_LRU_int_int(lf float64, hitp int, b *testing.B) {
+	maxItemCount := int(capacity * lf)
 	xo := New64S()
 	var l *lru.LRU[int, int]
 	l = lru.NewLRU(
 		hash.Number[int](),
 		func(int, int) bool { return l.Len() > maxItemCount },
 		lru.Capacity(capacity),
-		lru.MaxLoadFactor(0.95))
+		lru.MaxLoadFactor(lf))
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
 		l.Set(i, i)
@@ -228,26 +227,27 @@ func bench_LRU_int_int(hitp int, b *testing.B) {
 	}
 }
 
-func Benchmark_LRU_string_string_90(b *testing.B) {
-	bench_LRU_string_string(90, b)
+func Benchmark_LRU_string_string(b *testing.B) {
+	lfs := []float64{.9, .8, .7}
+	hrs := []int{90, 75, 50}
+	for _, h := range hrs {
+		for _, lf := range lfs {
+			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
+				bench_LRU_string_string(lf, h, b)
+			})
+		}
+	}
 }
 
-func Benchmark_LRU_string_string_75(b *testing.B) {
-	bench_LRU_string_string(75, b)
-}
-
-func Benchmark_LRU_string_string_50(b *testing.B) {
-	bench_LRU_string_string(50, b)
-}
-
-func bench_LRU_string_string(hitp int, b *testing.B) {
+func bench_LRU_string_string(lf float64, hitp int, b *testing.B) {
+	maxItemCount := int(capacity * lf)
 	xo := New64S()
 	var l *lru.LRU[string, string]
 	l = lru.NewLRU(
 		hash.String(),
 		func(string, string) bool { return l.Len() > maxItemCount },
 		lru.Capacity(capacity),
-		lru.MaxLoadFactor(0.95))
+		lru.MaxLoadFactor(lf))
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxItemCount; i++ {
@@ -259,89 +259,6 @@ func bench_LRU_string_string(hitp int, b *testing.B) {
 		if _, ok := l.Get(s[i]); !ok {
 			l.Set(s[i], s[i])
 		}
-	}
-}
-
-func Benchmark_map_int_int_90(b *testing.B) {
-	bench_map_int_int(90, b)
-}
-
-func Benchmark_map_int_int_75(b *testing.B) {
-	bench_map_int_int(75, b)
-}
-
-func Benchmark_map_int_int_50(b *testing.B) {
-	bench_map_int_int(50, b)
-}
-
-func bench_map_int_int(hitp int, b *testing.B) {
-	xo := New64S()
-	l := make(map[int]int, 8)
-	sampleSize := maxItemCount * 100 / hitp
-	// prefill
-	var h [maxItemCount]int
-	for i := range maxItemCount {
-		n := xo.IntN(sampleSize)
-		l[n] = n
-		h[i] = n
-	}
-
-	b.ResetTimer()
-	d := 0 // item to delete
-	hit := 0
-	miss := 0
-	for range b.N {
-		i := xo.IntN(sampleSize)
-		if _, ok := l[i]; !ok {
-			l[i] = i
-			delete(l, h[d])
-			h[d] = i
-			miss++
-		} else {
-			hit++
-		}
-		d = (d + 1) % maxItemCount
-	}
-}
-
-func Benchmark_map_string_string_90(b *testing.B) {
-	bench_map_string_string(90, b)
-}
-
-func Benchmark_map_string_string_75(b *testing.B) {
-	bench_map_string_string(75, b)
-}
-
-func Benchmark_map_string_string_50(b *testing.B) {
-	bench_map_string_string(50, b)
-}
-
-func bench_map_string_string(hitp int, b *testing.B) {
-	xo := New64S()
-	l := make(map[string]string, 8)
-	sampleSize := maxItemCount * 100 / hitp
-	s := stringArray(xo, sampleSize)
-	// prefill
-	var h [maxItemCount]int
-	for i := range maxItemCount {
-		n := xo.IntN(sampleSize)
-		ss := s[n]
-		l[ss] = ss
-		h[i] = n
-	}
-
-	b.ResetTimer()
-	d := 0 // item to delete
-	for range b.N {
-		i := xo.IntN(sampleSize)
-		ss := s[i]
-		if _, ok := l[ss]; !ok {
-			l[ss] = ss
-			delete(l, s[h[d]])
-			h[d] = i
-		} else {
-		}
-		d = (d + 1) % maxItemCount
 	}
 }
 
