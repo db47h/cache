@@ -24,9 +24,6 @@ const (
 	DefaultGrowthMultiplier = 1.5
 	// See MaxLoadFactor. We should be able to achieve load factors around 0.9 with H between 64 and 128 and a decent hash function.
 	DefaultMaxLoadFactor = 0.9
-	// Minimal value for GrowthRatio. This is a very aggressive value: for MaxLoadFactor = 0.9, this corresponds to a load factor
-	// of 0.8 after reallocating the table.
-	MinGrowthRatio = 1.125
 )
 
 func getOpts(opts []Option) *option {

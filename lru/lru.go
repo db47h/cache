@@ -20,10 +20,16 @@
 
 // Package lru provides a generic LRU hashmap for use as the core of a LRU cache.
 // Size and eviction policy are controlled by client code via an OnEvict() callback
-// called whenever a new item is inserted into the cache.
+// called whenever an entry is updated or a new one inserted.
+//
+// INternals:
+// http://people.csail.mit.edu/shanir/publications/disc2008_submission_98.pdf
 package lru
 
-import "math/bits"
+import (
+	"math"
+	"math/bits"
+)
 
 // LRU represents a Least Recently Used hash table.
 type LRU[K comparable, V any] struct {
@@ -68,11 +74,11 @@ func NewLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, o
 }
 
 func newLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts *option) *LRU[K, V] {
-	if opts.growthRatio < MinGrowthRatio {
-		panic("GrowthRatio < MinGrowthRatio")
-	}
 	if t := opts.maxLoadFactor; t < 0 || 1 < t {
 		panic("MaxLoadFactor out of range [0, 1]")
+	}
+	if opts.growthRatio <= 1 {
+		panic("GrowthRatio <= 1")
 	}
 	sz := opts.capacity
 	if sz < minSize {
@@ -109,25 +115,26 @@ func (l *LRU[K, V]) Set(key K, value V) {
 }
 
 func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
-	// "home" bucket
-	h := l.idx(hash)
 	// find a free slot
-	free := h
-	// TODO: adjust maxdist based on probability to find a free slot with ɑ=DefaultReallocThreshold
-	// consider l.h if we somehow end up in a situation where l.h is close to len(l.items)
-	maxDist := max(l.size()<<1, l.h)
-	for dist := 0; l.items[free].isSet(); free, dist = l.next(free), dist+1 {
-		if dist >= maxDist {
-			return false
-		}
+	if l.count == l.size() {
+		return false
 	}
+	// The probability for not finding a free slot within distance d is p=1/ɑ^(d-1).
+	// In practice, the average distance is 8 for ɑ=0.9, and a safe max search distance
+	// would be 1-256/Log₂(ɑ) or p=2^-256. We still scan the whole table because as long
+	// as ɑ<1, this is cheaper than aborting the search early and growing the table.
+	home := l.idx(hash)
+	free := home
+	for ; l.items[free].isSet(); free = l.next(free) {
+	}
+
 again:
-	if dist := l.dist(h, free); dist < l.h {
+	if dist := l.dist(home, free); dist < l.h {
 		// the free slot is within range of the home slot, insert item @l.items[free]
 		it := &l.items[free]
 		it.key = key
 		it.value = value
-		l.addToBucket(h, free)
+		l.addToBucket(home, free)
 		l.toFront(free)
 		return true
 	}
@@ -135,8 +142,11 @@ again:
 	for h := l.idxSub(free, l.h-1); h != free; h = l.next(h) {
 		// for a bucket b within [h, free) to be moveable, its home bucket must reside
 		// within the same range, so we use h.bHead to find candidates.
-		// This is not necessarily the optimal move, however going through the list to find
-		// the candidate farthest away from the free slot would be too costly.
+		// Since we always insert at items[h].bHead, closest to h, bHead is always the
+		// bucket in h's bucket chain that is farthest away from the free bucket, so it
+		// is always the best candidate for that chain. There may be better candidates in
+		// other bucket chains just past h itself, but this would require scanning the whole
+		// range free-h+1 -> free for every move.
 		if b := l.items[h].bHead; b > 0 && l.dist(b, free) < l.h {
 			l.move(h, free, b)
 			free = b
@@ -240,6 +250,17 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
+func (l *LRU[K, V]) Contains(key K, updateLRU bool) bool {
+	if i := l.find(l.idx(l.hash(key)), key); i != 0 {
+		if updateLRU {
+			l.unlink(i)
+			l.toFront(i)
+		}
+		return true
+	}
+	return false
+}
+
 func (l *LRU[K, V]) Delete(key K) {
 	h := l.idx(l.hash(key))
 	if i := l.find(h, key); i != 0 {
@@ -287,31 +308,37 @@ func (l *LRU[K, V]) grow() {
 	sz := l.size()
 	// if ɑ < aMax, try to increase H first as this does not require re-hashing.
 	if l.Load() < l.aMax && l.h < sz && l.count < sz {
-		l.h <<= 1
+		l.growH()
 		return
 	}
 	sz++ // compute new size based on len(l.items)
-	newSize := max(int(float64(sz)*l.gRatio), minSize)
-	if newSize <= sz { // cheap overflow check
-		// this panic can be recovered from, with the LRU in a valid state.
-		panic("maximum table size overflow")
+	newSize := max(math.Ceil(float64(sz)*l.gRatio), minSize)
+	if newSize > math.MaxInt {
+		panic("table size overflow")
 	}
+	sz = int(newSize)
 	// since we actually grow the table, we might as well reset H
 	l.h = defaultH
 	src := l.items
-	l.items = make([]item[K, V], newSize)
+	l.items = make([]item[K, V], sz)
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		for !l.insert(l.hash(key), key, src[i].value) {
 			// keep retrying with larger H: at this point, we've already resized the table,
 			// there should be enough room for new items.
 			if l.h >= l.size() {
-				// since there is room for new items, with H = l.size, this should never happen
+				// since there is room for new items, with H = l.size(), this should never happen
 				panic("unreachable")
 			}
-			l.h = min(l.h<<1, l.size())
+			l.growH()
 		}
 	}
+}
+
+// growH grows H while keeping it under l.size()
+func (l *LRU[K, V]) growH() {
+	// this cannot overflow: 8 <= l.size < MaxUint/sizeof(item) and H<<1 will not reach MaxInt before being clamped down to l.size.
+	l.h = min(l.h<<1, l.size())
 }
 
 // All returns an iterator for all keys in the lru table, lru first. The caller must not delete items while iterating.

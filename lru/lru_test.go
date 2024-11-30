@@ -216,6 +216,9 @@ func bench_LRU_int_int(hitp int, b *testing.B) {
 		lru.Capacity(capacity),
 		lru.MaxLoadFactor(0.95))
 	sampleSize := maxItemCount * 100 / hitp
+	for i := 0; i < maxItemCount; i++ {
+		l.Set(i, i)
+	}
 	b.ResetTimer()
 	for range b.N {
 		i := xo.IntN(sampleSize)
@@ -247,6 +250,9 @@ func bench_LRU_string_string(hitp int, b *testing.B) {
 		lru.MaxLoadFactor(0.95))
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
+	for i := 0; i < maxItemCount; i++ {
+		l.Set(s[i], s[i])
+	}
 	b.ResetTimer()
 	for range b.N {
 		i := xo.IntN(sampleSize)
