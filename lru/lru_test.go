@@ -188,7 +188,6 @@ func TestLRU_Delete(t *testing.T) {
 	}
 }
 
-// aim for a load factor ~ 0.9
 const capacity = 1 << 20
 
 func Benchmark_LRU_int_int(b *testing.B) {
@@ -213,7 +212,7 @@ func bench_LRU_int_int(lf float64, hitp int, b *testing.B) {
 		hash.Number[int](),
 		func(int, int) bool { return l.Len() > maxItemCount },
 		lru.Capacity(capacity),
-		lru.MaxLoadFactor(lf))
+		lru.MaxLoadFactor(lf+.0005)) // account for rounding errors
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
 		l.Set(i, i)
@@ -247,7 +246,7 @@ func bench_LRU_string_string(lf float64, hitp int, b *testing.B) {
 		hash.String(),
 		func(string, string) bool { return l.Len() > maxItemCount },
 		lru.Capacity(capacity),
-		lru.MaxLoadFactor(lf))
+		lru.MaxLoadFactor(lf+.0005)) // account for rounding errors
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxItemCount; i++ {

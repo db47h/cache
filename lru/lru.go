@@ -116,7 +116,7 @@ func (l *LRU[K, V]) Set(key K, value V) {
 
 func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
 	// find a free slot
-	if l.count == l.size() {
+	if l.count == l.Size() {
 		return false
 	}
 	// The probability for not finding a free slot within distance d is p=1/ɑ^(d-1).
@@ -193,12 +193,12 @@ func (l *LRU[K, V]) dist(i, j int) int {
 	// j > i, or j wrapped around
 	d := j - i
 	if d < 0 {
-		d += l.size()
+		d += l.Size()
 	}
 	return d
 }
 
-func (l *LRU[K, V]) size() int { return len(l.items) - 1 }
+func (l *LRU[K, V]) Size() int { return len(l.items) - 1 }
 
 func (l *LRU[K, V]) find(i int, key K) int {
 	for i = l.items[i].bHead; i > 0; i = l.items[i].bNext {
@@ -215,7 +215,7 @@ func (l *LRU[K, V]) find(i int, key K) int {
 // described here: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
 // modified to work with 32 and 64 bits numbers.
 func (l *LRU[K, V]) idx(hash uint64) int {
-	hi, _ := bits.Mul(uint(hash), uint(l.size()))
+	hi, _ := bits.Mul(uint(hash), uint(l.Size()))
 	return int(hi) + 1
 }
 
@@ -231,7 +231,7 @@ func (l *LRU[K, V]) next(i int) int {
 func (l *LRU[K, V]) idxSub(i int, j int) int {
 	i -= j
 	if i <= 0 {
-		i += l.size()
+		i += l.Size()
 	}
 	return i
 }
@@ -305,7 +305,7 @@ func (l *LRU[K, V]) toFront(i int) {
 
 // grow resizes the hash table.
 func (l *LRU[K, V]) grow() {
-	sz := l.size()
+	sz := l.Size()
 	// if ɑ < aMax, try to increase H first as this does not require re-hashing.
 	if l.Load() < l.aMax && l.h < sz && l.count < sz {
 		l.growH()
@@ -326,7 +326,7 @@ func (l *LRU[K, V]) grow() {
 		for !l.insert(l.hash(key), key, src[i].value) {
 			// keep retrying with larger H: at this point, we've already resized the table,
 			// there should be enough room for new items.
-			if l.h >= l.size() {
+			if l.h >= l.Size() {
 				// since there is room for new items, with H = l.size(), this should never happen
 				panic("unreachable")
 			}
@@ -338,7 +338,7 @@ func (l *LRU[K, V]) grow() {
 // growH grows H while keeping it under l.size()
 func (l *LRU[K, V]) growH() {
 	// this cannot overflow: 8 <= l.size < MaxUint/sizeof(item) and H<<1 will not reach MaxInt before being clamped down to l.size.
-	l.h = min(l.h<<1, l.size())
+	l.h = min(l.h<<1, l.Size())
 }
 
 // All returns an iterator for all keys in the lru table, lru first. The caller must not delete items while iterating.
@@ -387,4 +387,4 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 	return l.items[i].key, l.items[i].value, i != 0
 }
 
-func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(l.size()) }
+func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(l.Size()) }
