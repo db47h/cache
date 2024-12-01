@@ -23,7 +23,7 @@ func Bytes() func([]byte) uint64 {
 	}
 }
 
-const m5 = 0x1d8e4e27c47d124f
+// Integer hashing algorithm inspired by https://github.com/Nicoshev/rapidhash
 
 type IntType interface {
 	~int | ~int32 | ~int64 | ~uint | ~uint32 | ~uint64
@@ -31,9 +31,19 @@ type IntType interface {
 
 func Number[T IntType]() func(v T) uint64 {
 	seed := rand.Uint64()
+	var zero T
+	seed ^= mix(seed^hashkey[0], hashkey[1]) ^ uint64(unsafe.Sizeof(zero))
 	return func(v T) uint64 {
-		a := uint64(v)
-		return mix(m5^uint64(unsafe.Sizeof(v)), mix(a^hashkey[1], a^seed^hashkey[0]))
+		var a, b uint64
+		b = uint64(v)
+		if unsafe.Sizeof(v) == 4 {
+			b |= b << 32
+			a = b
+		} else {
+			a = bits.RotateLeft64(b, 32)
+		}
+		b, a = bits.Mul64(a^hashkey[1], b^seed)
+		return mix(a^hashkey[0]^uint64(unsafe.Sizeof(v)), b^hashkey[1])
 	}
 }
 
