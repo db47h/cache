@@ -36,11 +36,12 @@ type LRU[K comparable, V any] struct {
 	hash    func(K) uint64
 	onEvict func(K, V) bool
 
-	items  []item[K, V]
-	count  int
-	h      int
-	gRatio float64
-	aMax   float64
+	items    []item[K, V]
+	count    int
+	countMax int
+	h        int
+	gRatio   float64
+	aMax     float64
 }
 
 type item[K comparable, V any] struct {
@@ -84,14 +85,21 @@ func newLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, o
 	if sz < minSize {
 		sz = minSize
 	}
-	return &LRU[K, V]{
-		items:   make([]item[K, V], sz),
+	l := &LRU[K, V]{
 		hash:    hash,
 		onEvict: onEvict,
 		h:       defaultH,
 		gRatio:  opts.growthRatio,
 		aMax:    opts.maxLoadFactor,
 	}
+	l.alloc(sz)
+	return l
+}
+
+func (l *LRU[K, V]) alloc(sz int) {
+	l.items = make([]item[K, V], sz)
+	// need room for at least one item over load factor and cap at l.Size()
+	l.countMax = min(int(math.Ceil(float64(sz-1)*l.aMax))+1, sz-1)
 }
 
 func (l *LRU[K, V]) Set(key K, value V) {
@@ -210,7 +218,7 @@ func (l *LRU[K, V]) find(i int, key K) int {
 }
 
 // idx returns the index for the given hash in l.items. Note that the index is 1 based
-// and should be in the interval [1, len(l.items)-1].
+// and should be in the interval [1, l.Size()].
 // Instead of returning hash % size + 1, we use the faster mapping function
 // described here: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
 // modified to work with 32 and 64 bits numbers.
@@ -307,20 +315,18 @@ func (l *LRU[K, V]) toFront(i int) {
 func (l *LRU[K, V]) grow() {
 	sz := l.Size()
 	// if ɑ < aMax, try to increase H first as this does not require re-hashing.
-	if l.Load() < l.aMax && l.h < sz && l.count < sz {
+	if l.count < l.countMax && l.h < sz {
 		l.growH()
 		return
 	}
-	sz++ // compute new size based on len(l.items)
-	newSize := max(math.Ceil(float64(sz)*l.gRatio), minSize)
+	newSize := max(math.Ceil(float64(sz)*l.gRatio)+1, minSize)
 	if newSize > math.MaxInt {
 		panic("table size overflow")
 	}
-	sz = int(newSize)
 	// since we actually grow the table, we might as well reset H
 	l.h = defaultH
 	src := l.items
-	l.items = make([]item[K, V], sz)
+	l.alloc(int(newSize))
 	for i := src[0].prev; i != 0; i = src[i].prev {
 		key := src[i].key
 		for !l.insert(l.hash(key), key, src[i].value) {
@@ -388,3 +394,5 @@ func (l *LRU[K, V]) MostRecent() (K, V, bool) {
 }
 
 func (l *LRU[K, V]) Load() float64 { return float64(l.count) / float64(l.Size()) }
+
+func (l *LRU[K, V]) H() int { return l.h }

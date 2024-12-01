@@ -212,7 +212,7 @@ func bench_LRU_int_int(lf float64, hitp int, b *testing.B) {
 		hash.Number[int](),
 		func(int, int) bool { return l.Len() > maxItemCount },
 		lru.Capacity(capacity),
-		lru.MaxLoadFactor(lf+.0005)) // account for rounding errors
+		lru.MaxLoadFactor(lf))
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
 		l.Set(i, i)
