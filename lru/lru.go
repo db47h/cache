@@ -91,16 +91,20 @@ func (l *LRU[K, V]) alloc(sz int) {
 	l.countMax = min(int(math.Ceil(float64(sz)*l.aMax))+1, sz)
 }
 
-func (l *LRU[K, V]) Set(key K, value V) {
+// Set sets the value for the given key. It returns the previous value and true
+// if there was already a key with that value, otherwize it returns the zero
+// value of V and false.
+func (l *LRU[K, V]) Set(key K, value V) (V, bool) {
+	var prev V
 	hash := l.hash(key)
 	if i := l.find(l.idx(hash), key); i != 0 {
 		l.unlink(i)
 		l.toFront(i)
-		l.items[i].value = value
+		prev, l.items[i].value = l.items[i].value, value
 		if l.onEvict != nil {
 			l.Evict(l.onEvict)
 		}
-		return
+		return prev, true
 	}
 	for !l.insert(hash, key, value) {
 		l.grow()
@@ -109,6 +113,7 @@ func (l *LRU[K, V]) Set(key K, value V) {
 	if l.onEvict != nil {
 		l.Evict(l.onEvict)
 	}
+	return prev, false
 }
 
 func (l *LRU[K, V]) insert(hash uint64, key K, value V) bool {
@@ -247,11 +252,17 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
-func (l *LRU[K, V]) Delete(key K) {
+// Delete deletes the given key and returns its value and true if the key was
+// found, otherwise it returns the zero value for V and false.
+func (l *LRU[K, V]) Delete(key K) (V, bool) {
 	h := l.idx(l.hash(key))
 	if i := l.find(h, key); i != 0 {
+		v := l.items[i].value
 		l.del(h, i)
+		return v, true
 	}
+	var zero V
+	return zero, false
 }
 
 func (l *LRU[K, V]) del(h, i int) {
