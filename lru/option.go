@@ -1,22 +1,20 @@
 package lru
 
 type Option interface {
-	set(*option)
+	set(*options)
 }
 
-type optFunc func(*option)
+type optFunc func(*options)
 
-func (f optFunc) set(o *option) {
+func (f optFunc) set(o *options) {
 	f(o)
 }
 
-type option struct {
+type options struct {
 	growthRatio   float64
 	maxLoadFactor float64
 	capacity      int
-
-	// TODO
-	// maxprocs         int
+	// maxProcs      int
 }
 
 const (
@@ -26,8 +24,8 @@ const (
 	DefaultMaxLoadFactor = 0.9
 )
 
-func getOpts(opts []Option) *option {
-	o := &option{
+func getOpts(opts []Option) *options {
+	o := &options{
 		growthRatio:   DefaultGrowthMultiplier,
 		maxLoadFactor: DefaultMaxLoadFactor,
 		capacity:      minSize,
@@ -35,23 +33,41 @@ func getOpts(opts []Option) *option {
 	for _, op := range opts {
 		op.set(o)
 	}
+	if t := o.maxLoadFactor; t < 0 || 1 < t {
+		panic("MaxLoadFactor out of range [0, 1]")
+	}
+	if o.growthRatio <= 1 {
+		panic("GrowthRatio <= 1")
+	}
+	if o.capacity < minSize {
+		o.capacity = minSize
+	}
+	// if o.maxProcs < 1 {
+	// 	o.maxProcs = runtime.GOMAXPROCS(-1)
+	// }
 	return o
 }
 
 func GrowthRatio(m float64) Option {
-	return optFunc(func(o *option) {
+	return optFunc(func(o *options) {
 		o.growthRatio = m
 	})
 }
 
 func MaxLoadFactor(t float64) Option {
-	return optFunc(func(o *option) {
+	return optFunc(func(o *options) {
 		o.maxLoadFactor = t
 	})
 }
 
 func Capacity(cap int) Option {
-	return optFunc(func(o *option) {
+	return optFunc(func(o *options) {
 		o.capacity = cap
 	})
 }
+
+// func MaxProcs(mp int) Option {
+// 	return optFunc(func(o *options) {
+// 		o.maxProcs = mp
+// 	})
+// }

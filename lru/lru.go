@@ -71,35 +71,24 @@ const (
 )
 
 func NewLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts ...Option) *LRU[K, V] {
-	return newLRU(hash, onEvict, getOpts(opts))
+	var l LRU[K, V]
+	l.init(hash, onEvict, getOpts(opts))
+	return &l
 }
 
-func newLRU[K comparable, V any](hash func(K) uint64, onEvict func(K, V) bool, opts *option) *LRU[K, V] {
-	if t := opts.maxLoadFactor; t < 0 || 1 < t {
-		panic("MaxLoadFactor out of range [0, 1]")
-	}
-	if opts.growthRatio <= 1 {
-		panic("GrowthRatio <= 1")
-	}
-	sz := opts.capacity
-	if sz < minSize {
-		sz = minSize
-	}
-	l := &LRU[K, V]{
-		hash:    hash,
-		onEvict: onEvict,
-		h:       defaultH,
-		gRatio:  opts.growthRatio,
-		aMax:    opts.maxLoadFactor,
-	}
-	l.alloc(sz)
-	return l
+func (l *LRU[K, V]) init(hash func(K) uint64, onEvict func(K, V) bool, opts *options) {
+	l.hash = hash
+	l.onEvict = onEvict
+	l.h = defaultH
+	l.gRatio = opts.growthRatio
+	l.aMax = opts.maxLoadFactor
+	l.alloc(opts.capacity)
 }
 
 func (l *LRU[K, V]) alloc(sz int) {
-	l.items = make([]item[K, V], sz)
+	l.items = make([]item[K, V], sz+1)
 	// need room for at least one item over load factor and cap at l.Size()
-	l.countMax = min(int(math.Ceil(float64(sz-1)*l.aMax))+1, sz-1)
+	l.countMax = min(int(math.Ceil(float64(sz)*l.aMax))+1, sz)
 }
 
 func (l *LRU[K, V]) Set(key K, value V) {
@@ -319,7 +308,7 @@ func (l *LRU[K, V]) grow() {
 		l.growH()
 		return
 	}
-	newSize := max(math.Ceil(float64(sz)*l.gRatio)+1, minSize)
+	newSize := max(math.Ceil(float64(sz)*l.gRatio), minSize)
 	if newSize > math.MaxInt {
 		panic("table size overflow")
 	}
