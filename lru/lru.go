@@ -247,17 +247,6 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 	return zero, false
 }
 
-func (l *LRU[K, V]) Contains(key K, updateLRU bool) bool {
-	if i := l.find(l.idx(l.hash(key)), key); i != 0 {
-		if updateLRU {
-			l.unlink(i)
-			l.toFront(i)
-		}
-		return true
-	}
-	return false
-}
-
 func (l *LRU[K, V]) Delete(key K) {
 	h := l.idx(l.hash(key))
 	if i := l.find(h, key); i != 0 {
