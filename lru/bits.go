@@ -19,13 +19,13 @@ const h2Mask = 0x7F
 
 func splitHash(hash uint64) (h1 uint, h2 uint8) {
 	// TODO: on 32 bits platforms, h1 should b shifted right by 7 bits
-	return uint(hash) & ^uint(h2Mask), uint8(hash&h2Mask) | set
+	return uint(hash) & ^uint(h2Mask), uint8(hash&h2Mask) | setMask
 }
 
 const (
 	free      = 0
 	deleted   = 1
-	set       = 0x80
+	setMask   = 0x80
 	GroupSize = 8
 
 	loBits = 0x0101010101010101

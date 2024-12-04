@@ -85,12 +85,12 @@ func Test_bitsset_matchEmpty(t *testing.T) {
 			t.Fatal()
 		}
 		p := m.nextMatch()
-		if !assert.Equal(t, f1, pos+p) || !assert.True(t, cs[f1]&set == 0) {
+		if !assert.Equal(t, f1, pos+p) || !assert.True(t, cs[f1]&setMask == 0) {
 			t.Fatalf("F1 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 		}
 		if f1 != f2 {
 			p = m.nextMatch()
-			if !assert.Equal(t, f2, pos+p) || !assert.True(t, cs[f2]&set == 0) {
+			if !assert.Equal(t, f2, pos+p) || !assert.True(t, cs[f2]&setMask == 0) {
 				t.Fatalf("F2 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 			}
 		}
@@ -107,7 +107,7 @@ func Test_bitset_matchByte(t *testing.T) {
 		// free a pair of slots
 		f1 := pos + rand.IntN(GroupSize)
 		f2 := pos + rand.IntN(GroupSize)
-		v := uint8(rand.IntN(128-sz)+sz) | set
+		v := uint8(rand.IntN(128-sz)+sz) | setMask
 		if f1 > f2 {
 			f1, f2 = f2, f1
 		}
@@ -138,7 +138,7 @@ func makeCtrl(sz int) []uint8 {
 func fillCtrl(b []uint8) {
 	sz := len(b) - GroupSize + 1
 	for i := range sz {
-		b[i] = set | uint8(i)
+		b[i] = setMask | uint8(i)
 		if i < GroupSize-1 {
 			b[i+sz] = b[i]
 		}
