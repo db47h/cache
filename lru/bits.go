@@ -26,7 +26,7 @@ const (
 	free      = 0
 	deleted   = 1
 	setMask   = 0x80
-	GroupSize = 8
+	groupSize = 8
 
 	loBits = 0x0101010101010101
 	hiBits = 0x8080808080808080

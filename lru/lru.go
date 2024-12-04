@@ -64,7 +64,7 @@ func (l *LRU[K, V]) Init(opts ...Option) {
 
 func (l *LRU[K, V]) alloc(sz int) {
 	l.items = make([]item[K, V], sz+1)
-	l.ctrl = make([]uint8, sz+1+GroupSize-1)
+	l.ctrl = make([]uint8, sz+1+groupSize-1)
 	l.live = 0
 	l.dead = 0
 }
@@ -172,7 +172,7 @@ func (l *LRU[K, V]) insert(hash uint64, key K, value V) {
 again:
 	m := newBitset(&l.ctrl[pos]).matchEmpty()
 	if m == 0 {
-		pos = add(pos, GroupSize, sz)
+		pos = add(pos, groupSize, sz)
 		goto again
 	}
 	pos = add(pos, m.nextMatch(), sz)
@@ -180,7 +180,7 @@ again:
 	c := &l.ctrl[pos]
 	l.dead -= int(*c) // Deleted is 1, Free = 0
 	*c = h2
-	if pos < GroupSize {
+	if pos < groupSize {
 		// the table is 1 indexed, so we replicate items for pos in [1, GroupSize), not [0, GroupSize-1)
 		// note that pos can never be 0 here.
 		l.ctrl[pos+sz] = h2
@@ -234,7 +234,7 @@ func (l *LRU[K, V]) find(key K) (uint64, int) {
 		if s.matchZero() != 0 {
 			return hash, 0
 		}
-		pos = add(pos, GroupSize, sz)
+		pos = add(pos, groupSize, sz)
 	}
 }
 
@@ -258,7 +258,7 @@ func (l *LRU[K, V]) del(pos int) {
 		l.dead++
 	}
 	l.ctrl[pos] = flag
-	if pos < GroupSize {
+	if pos < groupSize {
 		l.ctrl[pos+sz] = flag
 	}
 	l.live--

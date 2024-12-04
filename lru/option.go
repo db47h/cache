@@ -16,7 +16,7 @@ type options struct {
 	// maxProcs      int
 }
 
-var defaultOpts = options{growthRatio: DefaultGrowthRatio, capacity: GroupSize}
+var defaultOpts = options{growthRatio: DefaultGrowthRatio, capacity: groupSize}
 
 const (
 	// See GrowthMultiplier. With a MaxLoadFactor at 15/16 this is equivalent to maintaining the load factor at 15/16/1.5 = 0.625 when growing the table.

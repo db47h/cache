@@ -49,15 +49,15 @@ func Test_splitHash(t *testing.T) {
 }
 
 func Test_bitset(t *testing.T) {
-	cs := make([]uint8, GroupSize*2)
-	for i := range GroupSize {
+	cs := make([]uint8, groupSize*2)
+	for i := range groupSize {
 		cs[i] = uint8(i) + 1
 	}
-	for i := range GroupSize - 1 {
-		cs[i+GroupSize] = cs[i]
+	for i := range groupSize - 1 {
+		cs[i+groupSize] = cs[i]
 	}
-	cs[GroupSize*2-1] = 0xFF
-	for i := range GroupSize {
+	cs[groupSize*2-1] = 0xFF
+	for i := range groupSize {
 		expected := bitset(binary.NativeEndian.Uint64(cs[i:]))
 		assert.Equal(t, expected, newBitset(&cs[i]))
 		// make sure we don't read past cs[size+GroupSize-2]
@@ -73,8 +73,8 @@ func Test_bitsset_matchEmpty(t *testing.T) {
 		// random start pos
 		pos := rand.IntN(sz)
 		// free a pair of slots
-		f1 := pos + rand.IntN(GroupSize)
-		f2 := pos + rand.IntN(GroupSize)
+		f1 := pos + rand.IntN(groupSize)
+		f2 := pos + rand.IntN(groupSize)
 		setCtrl(cs, f1, free)
 		setCtrl(cs, f2, deleted)
 		if f1 > f2 {
@@ -105,8 +105,8 @@ func Test_bitset_matchByte(t *testing.T) {
 		// random start pos
 		pos := rand.IntN(sz)
 		// free a pair of slots
-		f1 := pos + rand.IntN(GroupSize)
-		f2 := pos + rand.IntN(GroupSize)
+		f1 := pos + rand.IntN(groupSize)
+		f2 := pos + rand.IntN(groupSize)
 		v := uint8(rand.IntN(128-sz)+sz) | setMask
 		if f1 > f2 {
 			f1, f2 = f2, f1
@@ -132,26 +132,26 @@ func Test_bitset_matchByte(t *testing.T) {
 }
 
 func makeCtrl(sz int) []uint8 {
-	return make([]uint8, sz+GroupSize-1)
+	return make([]uint8, sz+groupSize-1)
 }
 
 func fillCtrl(b []uint8) {
-	sz := len(b) - GroupSize + 1
+	sz := len(b) - groupSize + 1
 	for i := range sz {
 		b[i] = setMask | uint8(i)
-		if i < GroupSize-1 {
+		if i < groupSize-1 {
 			b[i+sz] = b[i]
 		}
 	}
 }
 
 func setCtrl(b []uint8, pos int, v uint8) int {
-	sz := len(b) - GroupSize + 1
+	sz := len(b) - groupSize + 1
 	if pos >= sz {
 		pos -= sz
 	}
 	b[pos] = v
-	if pos < GroupSize-1 {
+	if pos < groupSize-1 {
 		b[pos+sz] = b[pos]
 	}
 	return pos
