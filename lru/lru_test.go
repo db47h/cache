@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/db47h/cache/v2/hash"
 	"github.com/db47h/cache/v2/lru"
 )
 
@@ -26,11 +25,11 @@ var td = []struct {
 }
 
 func populate() *lru.LRU[string, int] {
-	l := lru.NewLRU[string, int](hash.String(), nil)
+	var l lru.LRU[string, int]
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
-	return l
+	return &l
 }
 
 func TestLRU_Set(t *testing.T) {
@@ -58,9 +57,36 @@ func TestLRU_Set(t *testing.T) {
 	}
 }
 
+type cappedLRU[K comparable, V any] struct {
+	lru.LRU[K, V]
+	capacity int
+}
+
+func newLRU[K comparable, V any](capacity int) *cappedLRU[K, V] {
+	var l cappedLRU[K, V]
+	l.capacity = capacity
+	l.Init(lru.WithCapacity(capacity))
+	return &l
+}
+
+func (l *cappedLRU[K, V]) onEvict(K, V) bool {
+	return l.Len() > l.capacity
+}
+
+func (l *cappedLRU[K, V]) Set(key K, value V) {
+	if _, repl := l.LRU.Set(key, value); !repl {
+		l.Evict(l.onEvict)
+	}
+}
+
+func (l *cappedLRU[K, V]) Delete(key K) {
+	if _, del := l.LRU.Delete(key); del {
+		l.Evict(l.onEvict)
+	}
+}
+
 func TestLRU_Set_onEvict(t *testing.T) {
-	var l *lru.LRU[string, int]
-	l = lru.NewLRU(hash.String(), func(string, int) bool { return l.Len() > 2 })
+	l := newLRU[string, int](2)
 	for _, d := range td {
 		l.Set(d.key, d.value)
 	}
@@ -207,12 +233,7 @@ func Benchmark_LRU_int_int(b *testing.B) {
 func bench_LRU_int_int(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	var l *lru.LRU[int, int]
-	l = lru.NewLRU(
-		hash.Number[int](),
-		func(int, int) bool { return l.Len() > maxItemCount },
-		lru.Capacity(capacity),
-		lru.MaxLoadFactor(lf))
+	l := newLRU[int, int](capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
 		l.Set(i, i)
@@ -241,12 +262,7 @@ func Benchmark_LRU_string_string(b *testing.B) {
 func bench_LRU_string_string(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	var l *lru.LRU[string, string]
-	l = lru.NewLRU(
-		hash.String(),
-		func(string, string) bool { return l.Len() > maxItemCount },
-		lru.Capacity(capacity),
-		lru.MaxLoadFactor(lf+.0005)) // account for rounding errors
+	l := newLRU[string, string](capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxItemCount; i++ {

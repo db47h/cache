@@ -11,30 +11,25 @@ func (f optFunc) set(o *options) {
 }
 
 type options struct {
-	growthRatio   float64
-	maxLoadFactor float64
-	capacity      int
+	growthRatio float64
+	capacity    int
 	// maxProcs      int
 }
 
+var defaultOpts = options{growthRatio: DefaultGrowthRatio, capacity: GroupSize}
+
 const (
-	// See GrowthMultiplier. With a MaxLoadFactor at 0.9, this is equivalent to maintaining the load factor at 0.9/1.5 = 0.6 when growing the table.
-	DefaultGrowthMultiplier = 1.5
-	// See MaxLoadFactor. We should be able to achieve load factors around 0.9 with H between 64 and 128 and a decent hash function.
-	DefaultMaxLoadFactor = 0.9
+	// See GrowthMultiplier. With a MaxLoadFactor at 15/16 this is equivalent to maintaining the load factor at 15/16/1.5 = 0.625 when growing the table.
+	// Another iteresting value is 1.25, wwich would maintain the load fator at or above 0.75.
+	DefaultGrowthRatio = 1.5
+
+	minSize = 16
 )
 
 func getOpts(opts []Option) *options {
-	o := &options{
-		growthRatio:   DefaultGrowthMultiplier,
-		maxLoadFactor: DefaultMaxLoadFactor,
-		capacity:      minSize,
-	}
+	o := defaultOpts
 	for _, op := range opts {
-		op.set(o)
-	}
-	if t := o.maxLoadFactor; t < 0 || 1 < t {
-		panic("MaxLoadFactor out of range [0, 1]")
+		op.set(&o)
 	}
 	if o.growthRatio <= 1 {
 		panic("GrowthRatio <= 1")
@@ -45,29 +40,17 @@ func getOpts(opts []Option) *options {
 	// if o.maxProcs < 1 {
 	// 	o.maxProcs = runtime.GOMAXPROCS(-1)
 	// }
-	return o
+	return &o
 }
 
-func GrowthRatio(m float64) Option {
+func WithGrowthRatio(m float64) Option {
 	return optFunc(func(o *options) {
 		o.growthRatio = m
 	})
 }
 
-func MaxLoadFactor(t float64) Option {
-	return optFunc(func(o *options) {
-		o.maxLoadFactor = t
-	})
-}
-
-func Capacity(cap int) Option {
+func WithCapacity(cap int) Option {
 	return optFunc(func(o *options) {
 		o.capacity = cap
 	})
 }
-
-// func MaxProcs(mp int) Option {
-// 	return optFunc(func(o *options) {
-// 		o.maxProcs = mp
-// 	})
-// }

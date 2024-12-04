@@ -2,7 +2,6 @@ package lru_test
 
 import (
 	"encoding/base64"
-	"hash/maphash"
 	"io"
 	"net/http"
 	"os"
@@ -20,17 +19,13 @@ type CachedFile struct {
 }
 
 type HttpCache struct {
-	lru  *lru.LRU[string, CachedFile]
+	lru  lru.LRU[string, CachedFile]
 	size int64
 	cap  int64
 }
 
 func NewHttpCache(capacity int) *HttpCache {
-	seed := maphash.MakeSeed()
 	c := new(HttpCache)
-	c.lru = lru.NewLRU(
-		func(s string) uint64 { return maphash.String(seed, s) },
-		c.onEvict)
 	c.cap = int64(capacity)
 	return c
 }
