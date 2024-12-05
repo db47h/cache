@@ -39,8 +39,8 @@ func Test_reduceRange(t *testing.T) {
 
 func Test_splitHash(t *testing.T) {
 	const (
-		hash = 0x21122334455667ff8 // deliberately larger than maxuint so we also test our filtering for 32bits platforms
-		eh1  = 0x1122334455667f80
+		hash = 0x1122334455667ff8
+		eh1  = 0x1122334455667ff8
 		eh2  = 0xf8
 	)
 	h1, h2 := splitHash(hash & math.MaxUint)
@@ -58,14 +58,14 @@ func Test_bitset(t *testing.T) {
 	}
 	cs[groupSize*2-1] = 0xFF
 	for i := range groupSize {
-		expected := bitset(binary.NativeEndian.Uint64(cs[i:]))
+		expected := bitset(binary.LittleEndian.Uint64(cs[i:]))
 		assert.Equal(t, expected, newBitset(&cs[i]))
 		// make sure we don't read past cs[size+GroupSize-2]
 		assert.True(t, bitset(expected).matchByte(0xFF) == 0)
 	}
 }
 
-func Test_bitsset_matchEmpty(t *testing.T) {
+func Test_bitsset_matchNotSet(t *testing.T) {
 	const sz = 32
 	cs := makeCtrl(32)
 	for range 1000 {
@@ -75,12 +75,12 @@ func Test_bitsset_matchEmpty(t *testing.T) {
 		// free a pair of slots
 		f1 := pos + rand.IntN(groupSize)
 		f2 := pos + rand.IntN(groupSize)
-		setCtrl(cs, f1, free)
+		setCtrl(cs, f1, empty)
 		setCtrl(cs, f2, deleted)
 		if f1 > f2 {
 			f1, f2 = f2, f1
 		}
-		m := newBitset(&cs[pos]).matchEmpty()
+		m := newBitset(&cs[pos]).matchNotSet()
 		if !assert.True(t, m != 0) {
 			t.Fatal()
 		}

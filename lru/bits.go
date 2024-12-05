@@ -1,6 +1,7 @@
 package lru
 
 import (
+	"encoding/binary"
 	"math/bits"
 	"unsafe"
 )
@@ -15,15 +16,15 @@ func reduceRange(x uint, n int) int {
 	return int(h)
 }
 
-const h2Mask = 0x7F
-
+// splitHash returns uint(hash) and hash&7F|setMask. Since reduceRange (the only consumer for H1) does
+// not use a modulo operation, we can safely use the full hash for H1.
 func splitHash(hash uint64) (h1 uint, h2 uint8) {
-	// TODO: since reduceRange does not rely on modulo, we can use the full hash as h1
-	return uint(hash) & ^uint(h2Mask), uint8(hash&h2Mask) | setMask
+	// uint(hash), uint8(hash)&0x7F | setMask simplifies to:
+	return uint(hash), uint8(hash) | setMask
 }
 
 const (
-	free      = 0
+	empty     = 0
 	deleted   = 1
 	setMask   = 0x80
 	groupSize = 8
@@ -37,15 +38,16 @@ const (
 type bitset uint64
 
 func newBitset(c *uint8) bitset {
-	return *(*bitset)(unsafe.Pointer(c))
+	b := *(*[8]uint8)(unsafe.Pointer(c))
+	return bitset(binary.LittleEndian.Uint64(b[:]))
 }
 
-func (s bitset) matchEmpty() bitset       { return (s & hiBits) ^ hiBits }
+func (s bitset) matchNotSet() bitset      { return (s & hiBits) ^ hiBits }
+func (s bitset) matchEmpty() bitset       { return (s - loBits) & ^s & hiBits }
 func (s bitset) matchZero() bitset        { return (s - loBits) & ^s & hiBits }
 func (s bitset) matchByte(b uint8) bitset { return (s ^ (loBits * bitset(b))).matchZero() }
 
 func (s *bitset) nextMatch() int {
-	// TODO: need to change this based on platform endianness
 	n := bits.TrailingZeros64(uint64(*s))
 	// shift by an unsigned value to avoid internal checks for negative shift amounts
 	*s &= ^(1 << uint(n))

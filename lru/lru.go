@@ -166,15 +166,15 @@ func (m *Map[K, V]) Len() int { return m.live }
 
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	sz := m.Size()
-	// rehash if load factor >= 15/16
+	// rehash if there are less than 1/16 free slots.
 	if sz-m.live-m.dead <= sz>>4 {
-		sz = m.grow(sz)
+		sz = m.grow(max(minSize, sz))
 		hash = m.hasher.Hash(key)
 	}
 	h1, h2 := splitHash(hash)
 	pos := reduceRange(h1, sz) + 1 // pos in range [1..Size]
 again:
-	e := newBitset(&m.ctrl[pos]).matchEmpty()
+	e := newBitset(&m.ctrl[pos]).matchNotSet()
 	if e == 0 {
 		pos = add(pos, groupSize, sz)
 		goto again
@@ -205,7 +205,7 @@ func add(pos, x, sz int) int {
 }
 
 func (m *Map[K, V]) grow(sz int) int {
-	// grow the table if load factor >
+	// grow the table only if load factor >
 	// << 1 -> 5/8 0.625
 	// << 2 -> 3/4 0.75
 	// << 3 -> 5/6 0.833
@@ -230,11 +230,8 @@ func (m *Map[K, V]) grow(sz int) int {
 }
 
 func (m *Map[K, V]) find(key K) (uint64, int) {
-	if m.live == 0 {
-		if len(m.ctrl) == 0 {
-			m.Init()
-		}
-		return m.hasher.Hash(key), 0
+	if len(m.ctrl) == 0 {
+		return 0, 0
 	}
 	hash := m.hasher.Hash(key)
 	h1, h2 := splitHash(hash)
@@ -248,7 +245,7 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 				return hash, p
 			}
 		}
-		if s.matchZero() != 0 {
+		if s.matchEmpty() != 0 {
 			return hash, 0
 		}
 		pos = add(pos, groupSize, sz)
