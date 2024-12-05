@@ -18,7 +18,7 @@ func reduceRange(x uint, n int) int {
 const h2Mask = 0x7F
 
 func splitHash(hash uint64) (h1 uint, h2 uint8) {
-	// TODO: on 32 bits platforms, h1 should b shifted right by 7 bits
+	// TODO: since reduceRange does not rely on modulo, we can use the full hash as h1
 	return uint(hash) & ^uint(h2Mask), uint8(hash&h2Mask) | setMask
 }
 

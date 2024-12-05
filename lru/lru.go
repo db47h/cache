@@ -55,18 +55,10 @@ func NewMap[K comparable, V any](opts ...Option) *Map[K, V] {
 	return &m
 }
 
-func (r *Map[K, V]) Init(opts ...Option) {
+func (m *Map[K, V]) Init(opts ...Option) {
 	o := getOpts(opts)
-	r.hasher = maphash.NewHasher[K]()
-	r.alloc(o.capacity)
-	r.gRatio = o.growthRatio
-}
-
-func (m *Map[K, V]) alloc(sz int) {
-	m.items = make([]item[K, V], sz+1)
-	m.ctrl = make([]uint8, sz+1+groupSize-1)
-	m.live = 0
-	m.dead = 0
+	m.gRatio = o.growthRatio
+	m.grow(o.capacity)
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -137,6 +129,7 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 			if !yield(it.key, it.value) {
 				break
 			}
+			// deletes do not alter it.prev
 			i = it.prev
 		}
 	}
@@ -174,8 +167,9 @@ func (m *Map[K, V]) Len() int { return m.live }
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	sz := m.Size()
 	// rehash if load factor >= 15/16
-	if sz-m.live <= sz>>4 {
-		sz = m.rehash()
+	if sz-m.live-m.dead <= sz>>4 {
+		sz = m.grow(sz)
+		hash = m.hasher.Hash(key)
 	}
 	h1, h2 := splitHash(hash)
 	pos := reduceRange(h1, sz) + 1 // pos in range [1..Size]
@@ -210,10 +204,23 @@ func add(pos, x, sz int) int {
 	return pos
 }
 
-func (m *Map[K, V]) rehash() int {
-	sz := int(math.Ceil(float64(m.Size()) * m.gRatio))
+func (m *Map[K, V]) grow(sz int) int {
+	// grow the table if load factor >
+	// << 1 -> 5/8 0.625
+	// << 2 -> 3/4 0.75
+	// << 3 -> 5/6 0.833
+	if m.live > m.dead<<2 {
+		sz = int(math.Ceil(float64(sz) * m.gRatio))
+	}
 	src := m.items
-	m.alloc(sz)
+	m.hasher = maphash.NewHasher[K]()
+	m.items = make([]item[K, V], sz+1)
+	m.ctrl = make([]uint8, sz+1+groupSize-1)
+	m.live = 0
+	m.dead = 0
+	if len(src) == 0 {
+		return sz
+	}
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hasher.Hash(it.key), it.key, it.value)
@@ -256,21 +263,11 @@ func (m *Map[K, V]) del(pos int) {
 	it.key = zeroK
 	it.value = zeroV
 
-	sz := m.Size()
-	// optimization: if ctrl byte ctrl[pos-1] is free, we can flag ctrl[p] free as well
-	pp := pos - 1
-	if pp < 1 {
-		pp += sz
-	}
-	var flag uint8 = free
-	if m.ctrl[pp] != free {
-		flag = deleted
-		m.dead++
-	}
-	m.ctrl[pos] = flag
+	m.ctrl[pos] = deleted
 	if pos < groupSize {
-		m.ctrl[pos+sz] = flag
+		m.ctrl[pos+m.Size()] = deleted
 	}
+	m.dead++
 	m.live--
 }
 

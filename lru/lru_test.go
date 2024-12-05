@@ -54,18 +54,25 @@ func TestMap_Set(t *testing.T) {
 type cappedMap[K comparable, V any] struct {
 	lru.Map[K, V]
 	capacity int
+	max      int
 }
 
-func newMap[K comparable, V any](capacity int) *cappedMap[K, V] {
+func newMap[K comparable, V any](max, capacity int) *cappedMap[K, V] {
 	var m cappedMap[K, V]
 	m.capacity = capacity
+	m.max = max
 	m.Init(lru.WithCapacity(capacity))
 	return &m
 }
 
 func (m *cappedMap[K, V]) evict() {
-	for m.Len() > m.capacity {
-		m.DeleteLRU()
+	for m.Len() > m.max {
+		// m.DeleteLRU()
+		k, _ := m.LeastRecent()
+		_, ok := m.Delete(k)
+		if !ok {
+			panic("Delete(LeastRecent()): key not found")
+		}
 	}
 }
 
@@ -75,8 +82,8 @@ func (m *cappedMap[K, V]) Set(key K, value V) {
 	}
 }
 
-func TestMap_Set_onEvict(t *testing.T) {
-	m := newMap[string, int](2)
+func TestMap_Set_withEvict(t *testing.T) {
+	m := newMap[string, int](2, 0)
 	for _, d := range td {
 		m.Set(d.key, d.value)
 	}
@@ -217,10 +224,11 @@ func Benchmark_Map_int_int(b *testing.B) {
 func bench_Map_int_int(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	m := newMap[int, int](capacity)
+	m := newMap[int, int](maxItemCount, capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
-		m.Set(i, i)
+		j := xo.IntN(sampleSize)
+		m.Set(j, j)
 	}
 	b.ResetTimer()
 	for range b.N {
@@ -246,11 +254,12 @@ func Benchmark_Map_string_string(b *testing.B) {
 func bench_Map_string_string(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	m := newMap[string, string](capacity)
+	m := newMap[string, string](maxItemCount, capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxItemCount; i++ {
-		m.Set(s[i], s[i])
+		j := xo.IntN(sampleSize)
+		m.Set(s[j], s[j])
 	}
 	b.ResetTimer()
 	for range b.N {
