@@ -39,18 +39,12 @@ func TestMap_Set(t *testing.T) {
 	}
 
 	// check item ordering
-	k, v, ok := m.MostRecent()
-	if !ok {
-		t.Fatal("MostRecent did not return any value")
-	}
+	k, v := m.MostRecent()
 	it := &td[len(td)-1]
 	if k != it.key || v != it.value {
 		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v, ok = m.LeastRecent()
-	if !ok {
-		t.Fatal("LeastRecent did not return any value")
-	}
+	k, v = m.LeastRecent()
 	it = &td[0]
 	if k != it.key || v != it.value {
 		t.Fatalf("LeastRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
@@ -69,13 +63,15 @@ func newMap[K comparable, V any](capacity int) *cappedMap[K, V] {
 	return &m
 }
 
-func (m *cappedMap[K, V]) onEvict(K, V) bool {
-	return m.Len() > m.capacity
+func (m *cappedMap[K, V]) evict() {
+	for m.Len() > m.capacity {
+		m.DeleteLRU()
+	}
 }
 
 func (m *cappedMap[K, V]) Set(key K, value V) {
 	if _, repl := m.Map.Set(key, value); !repl {
-		m.Evict(m.onEvict)
+		m.evict()
 	}
 }
 
@@ -93,18 +89,12 @@ func TestMap_Set_onEvict(t *testing.T) {
 		t.Fatalf("Size(): expected %d; got %d", expectedSize, m.Len())
 	}
 
-	k, v, ok := m.MostRecent()
-	if !ok {
-		t.Fatal("MostRecent did not return any value")
-	}
+	k, v := m.MostRecent()
 	it := &td[len(td)-1]
 	if k != it.key || v != it.value {
 		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v, ok = m.LeastRecent()
-	if !ok {
-		t.Fatal("LeastRecent did not return any value")
-	}
+	k, v = m.LeastRecent()
 	it = &td[len(td)-expectedSize]
 	if k != it.key || v != it.value {
 		t.Fatalf("LeastRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
@@ -118,7 +108,7 @@ func TestMap_Get(t *testing.T) {
 		if !ok || v != d.value {
 			t.Errorf("Get(%q): expected %d, %v; got %d, %v", d.key, d.value, true, v, ok)
 		}
-		k, v, ok := m.MostRecent()
+		k, v := m.MostRecent()
 		if !ok {
 			t.Fatal("MostRecent did not return any value")
 		}
@@ -126,7 +116,7 @@ func TestMap_Get(t *testing.T) {
 			t.Fatalf("MostRecent: expected %s, %d; got %s, %d", d.key, d.value, k, v)
 		}
 
-		k, v, ok = m.LeastRecent()
+		k, v = m.LeastRecent()
 		if !ok {
 			t.Fatal("LeastRecent did not return any value")
 		}

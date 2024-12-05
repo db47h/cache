@@ -129,7 +129,6 @@ func (m *Map[K, V]) Values() func(yield func(V) bool) {
 func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 	// TODO: allow eviction of items while going through the map.
 	// this could be a good replacement for Evict. We could also turn Evict into an iterator?
-	// or a simpler DeleteLRU
 	return func(yield func(K, V) bool) {
 		// for i := l.items[0].prev; i != 0 && yield(l.items[i].key, l.items[i].value); i = l.items[i].prev {
 		// }
@@ -143,26 +142,27 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 	}
 }
 
-// Evict calls the evict callback for each item, lru first, and deletes them until the evict callback function returns false.
-func (m *Map[K, V]) Evict(evict func(K, V) bool) {
-	for {
-		i := m.items[0].prev
-		if i == 0 || !evict(m.items[i].key, m.items[i].value) {
-			return
-		}
-		m.del(i)
+func (m *Map[K, V]) DeleteLRU() (key K, value V) {
+	i := m.items[0].prev
+	if i == 0 {
+		return
 	}
+	it := &m.items[i]
+	key = it.key
+	value = it.value
+	m.del(i)
+	return
 }
 
-func (m *Map[K, V]) LeastRecent() (K, V, bool) {
+func (m *Map[K, V]) LeastRecent() (K, V) {
 	i := m.items[0].prev
 	// l.items[0].key and l.items[0].value are zero values for K and V
-	return m.items[i].key, m.items[i].value, i != 0
+	return m.items[i].key, m.items[i].value
 }
 
-func (m *Map[K, V]) MostRecent() (K, V, bool) {
+func (m *Map[K, V]) MostRecent() (K, V) {
 	i := m.items[0].next
-	return m.items[i].key, m.items[i].value, i != 0
+	return m.items[i].key, m.items[i].value
 }
 
 func (m *Map[K, V]) Load() float64 { return float64(m.live) / float64(m.Size()) }
