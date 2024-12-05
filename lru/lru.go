@@ -32,8 +32,8 @@ import (
 	"github.com/dolthub/maphash"
 )
 
-// LRU represents a Least Recently Used hash table.
-type LRU[K comparable, V any] struct {
+// Map represents a Least Recently Used hash table.
+type Map[K comparable, V any] struct {
 	hasher maphash.Hasher[K]
 	ctrl   []uint8
 	items  []item[K, V]
@@ -49,48 +49,48 @@ type item[K comparable, V any] struct {
 	next  int
 }
 
-func NewLRU[K comparable, V any](opts ...Option) *LRU[K, V] {
-	var l LRU[K, V]
-	l.Init(opts...)
-	return &l
+func NewMap[K comparable, V any](opts ...Option) *Map[K, V] {
+	var m Map[K, V]
+	m.Init(opts...)
+	return &m
 }
 
-func (l *LRU[K, V]) Init(opts ...Option) {
+func (r *Map[K, V]) Init(opts ...Option) {
 	o := getOpts(opts)
-	l.hasher = maphash.NewHasher[K]()
-	l.alloc(o.capacity)
-	l.gRatio = o.growthRatio
+	r.hasher = maphash.NewHasher[K]()
+	r.alloc(o.capacity)
+	r.gRatio = o.growthRatio
 }
 
-func (l *LRU[K, V]) alloc(sz int) {
-	l.items = make([]item[K, V], sz+1)
-	l.ctrl = make([]uint8, sz+1+groupSize-1)
-	l.live = 0
-	l.dead = 0
+func (m *Map[K, V]) alloc(sz int) {
+	m.items = make([]item[K, V], sz+1)
+	m.ctrl = make([]uint8, sz+1+groupSize-1)
+	m.live = 0
+	m.dead = 0
 }
 
 // Set sets the value for the given key. It returns the previous value and true
 // if there was already a key with that value, otherwize it returns the zero
 // value of V and false.
-func (l *LRU[K, V]) Set(key K, value V) (prev V, replaced bool) {
-	hash, i := l.find(key)
+func (m *Map[K, V]) Set(key K, value V) (prev V, replaced bool) {
+	hash, i := m.find(key)
 	if i != 0 {
-		it := &l.items[i]
-		l.unlink(it)
-		l.toFront(it, i)
+		it := &m.items[i]
+		m.unlink(it)
+		m.toFront(it, i)
 		prev, it.value = it.value, value
 		return prev, true
 	}
 
-	l.insert(hash, key, value)
+	m.insert(hash, key, value)
 	return prev, false
 }
 
-func (l *LRU[K, V]) Get(key K) (V, bool) {
-	if _, i := l.find(key); i != 0 {
-		it := &l.items[i]
-		l.unlink(it)
-		l.toFront(it, i)
+func (m *Map[K, V]) Get(key K) (V, bool) {
+	if _, i := m.find(key); i != 0 {
+		it := &m.items[i]
+		m.unlink(it)
+		m.toFront(it, i)
 		return it.value, true
 	}
 	var zero V
@@ -99,96 +99,106 @@ func (l *LRU[K, V]) Get(key K) (V, bool) {
 
 // Delete deletes the given key and returns its value and true if the key was
 // found, otherwise it returns the zero value for V and false.
-func (l *LRU[K, V]) Delete(key K) (V, bool) {
-	if _, i := l.find(key); i != 0 {
-		v := l.items[i].value
-		l.del(i)
+func (m *Map[K, V]) Delete(key K) (V, bool) {
+	if _, i := m.find(key); i != 0 {
+		v := m.items[i].value
+		m.del(i)
 		return v, true
 	}
 	var zero V
 	return zero, false
 }
 
-// All returns an iterator for all keys in the lru table, lru first. The caller must not delete items while iterating.
-func (l *LRU[K, V]) Keys() func(yield func(K) bool) {
+// All returns an iterator for all keys in the Map, lru first. The caller must not delete items while iterating.
+func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 	return func(yield func(K) bool) {
-		for i := l.items[0].prev; i != 0 && yield(l.items[i].key); i = l.items[i].prev {
+		for i := m.items[0].prev; i != 0 && yield(m.items[i].key); i = m.items[i].prev {
 		}
 	}
 }
 
-// All returns an iterator for all values in the lru table, lru first. The caller must not delete items while iterating.
-func (l *LRU[K, V]) Values() func(yield func(V) bool) {
+// All returns an iterator for all values in the Map, lru first. The caller must not delete items while iterating.
+func (m *Map[K, V]) Values() func(yield func(V) bool) {
 	return func(yield func(V) bool) {
-		for i := l.items[0].prev; i != 0 && yield(l.items[i].value); i = l.items[i].prev {
+		for i := m.items[0].prev; i != 0 && yield(m.items[i].value); i = m.items[i].prev {
 		}
 	}
 }
 
-// All returns an iterator for all key value pairs in the lru table, lru first. The caller must not delete items while iterating.
-func (l *LRU[K, V]) All() func(yield func(K, V) bool) {
+// All returns an iterator for all key value pairs in the Map, lru first. The caller must not delete items while iterating.
+func (m *Map[K, V]) All() func(yield func(K, V) bool) {
+	// TODO: allow eviction of items while going through the map.
+	// this could be a good replacement for Evict. We could also turn Evict into an iterator?
+	// or a simpler DeleteLRU
 	return func(yield func(K, V) bool) {
-		for i := l.items[0].prev; i != 0 && yield(l.items[i].key, l.items[i].value); i = l.items[i].prev {
+		// for i := l.items[0].prev; i != 0 && yield(l.items[i].key, l.items[i].value); i = l.items[i].prev {
+		// }
+		for i := m.items[0].prev; i != 0; {
+			it := &m.items[i]
+			if !yield(it.key, it.value) {
+				break
+			}
+			i = it.prev
 		}
 	}
 }
 
 // Evict calls the evict callback for each item, lru first, and deletes them until the evict callback function returns false.
-func (l *LRU[K, V]) Evict(evict func(K, V) bool) {
+func (m *Map[K, V]) Evict(evict func(K, V) bool) {
 	for {
-		i := l.items[0].prev
-		if i == 0 || !evict(l.items[i].key, l.items[i].value) {
+		i := m.items[0].prev
+		if i == 0 || !evict(m.items[i].key, m.items[i].value) {
 			return
 		}
-		l.del(i)
+		m.del(i)
 	}
 }
 
-func (l *LRU[K, V]) LeastRecent() (K, V, bool) {
-	i := l.items[0].prev
-	// l.items[i].key and l.items[i].value are zero values for K and V
-	return l.items[i].key, l.items[i].value, i != 0
+func (m *Map[K, V]) LeastRecent() (K, V, bool) {
+	i := m.items[0].prev
+	// l.items[0].key and l.items[0].value are zero values for K and V
+	return m.items[i].key, m.items[i].value, i != 0
 }
 
-func (l *LRU[K, V]) MostRecent() (K, V, bool) {
-	i := l.items[0].next
-	return l.items[i].key, l.items[i].value, i != 0
+func (m *Map[K, V]) MostRecent() (K, V, bool) {
+	i := m.items[0].next
+	return m.items[i].key, m.items[i].value, i != 0
 }
 
-func (l *LRU[K, V]) Load() float64 { return float64(l.live) / float64(l.Size()) }
+func (m *Map[K, V]) Load() float64 { return float64(m.live) / float64(m.Size()) }
 
-func (l *LRU[K, V]) Size() int { return len(l.items) - 1 }
+func (m *Map[K, V]) Size() int { return len(m.items) - 1 }
 
-func (l *LRU[K, V]) Len() int { return l.live }
+func (m *Map[K, V]) Len() int { return m.live }
 
-func (l *LRU[K, V]) insert(hash uint64, key K, value V) {
-	sz := l.Size()
+func (m *Map[K, V]) insert(hash uint64, key K, value V) {
+	sz := m.Size()
 	// rehash if load factor >= 15/16
-	if sz-l.live <= sz>>4 {
-		sz = l.rehash()
+	if sz-m.live <= sz>>4 {
+		sz = m.rehash()
 	}
 	h1, h2 := splitHash(hash)
 	pos := reduceRange(h1, sz) + 1 // pos in range [1..Size]
 again:
-	m := newBitset(&l.ctrl[pos]).matchEmpty()
-	if m == 0 {
+	e := newBitset(&m.ctrl[pos]).matchEmpty()
+	if e == 0 {
 		pos = add(pos, groupSize, sz)
 		goto again
 	}
-	pos = add(pos, m.nextMatch(), sz)
-	l.live++
-	c := &l.ctrl[pos]
-	l.dead -= int(*c) // Deleted is 1, Free = 0
+	pos = add(pos, e.nextMatch(), sz)
+	m.live++
+	c := &m.ctrl[pos]
+	m.dead -= int(*c) // Deleted is 1, Free = 0
 	*c = h2
 	if pos < groupSize {
 		// the table is 1 indexed, so we replicate items for pos in [1, GroupSize), not [0, GroupSize-1)
 		// note that pos can never be 0 here.
-		l.ctrl[pos+sz] = h2
+		m.ctrl[pos+sz] = h2
 	}
-	it := &l.items[pos]
+	it := &m.items[pos]
 	it.key = key
 	it.value = value
-	l.toFront(it, pos)
+	m.toFront(it, pos)
 }
 
 // add adds x to pos and returns the new position in [1, sz]
@@ -200,34 +210,34 @@ func add(pos, x, sz int) int {
 	return pos
 }
 
-func (l *LRU[K, V]) rehash() int {
-	sz := int(math.Ceil(float64(l.Size()) * l.gRatio))
-	src := l.items
-	l.alloc(sz)
+func (m *Map[K, V]) rehash() int {
+	sz := int(math.Ceil(float64(m.Size()) * m.gRatio))
+	src := m.items
+	m.alloc(sz)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
-		l.insert(l.hasher.Hash(it.key), it.key, it.value)
+		m.insert(m.hasher.Hash(it.key), it.key, it.value)
 		i = it.prev
 	}
 	return sz
 }
 
-func (l *LRU[K, V]) find(key K) (uint64, int) {
-	if l.live == 0 {
-		if len(l.ctrl) == 0 {
-			l.Init()
+func (m *Map[K, V]) find(key K) (uint64, int) {
+	if m.live == 0 {
+		if len(m.ctrl) == 0 {
+			m.Init()
 		}
-		return l.hasher.Hash(key), 0
+		return m.hasher.Hash(key), 0
 	}
-	hash := l.hasher.Hash(key)
+	hash := m.hasher.Hash(key)
 	h1, h2 := splitHash(hash)
-	sz := l.Size()
+	sz := m.Size()
 	pos := reduceRange(h1, sz) + 1
 	for {
-		s := newBitset(&l.ctrl[pos])
-		for m := s.matchByte(h2); m != 0; {
-			p := add(pos, m.nextMatch(), sz)
-			if l.items[p].key == key {
+		s := newBitset(&m.ctrl[pos])
+		for mb := s.matchByte(h2); mb != 0; {
+			p := add(pos, mb.nextMatch(), sz)
+			if m.items[p].key == key {
 				return hash, p
 			}
 		}
@@ -238,44 +248,44 @@ func (l *LRU[K, V]) find(key K) (uint64, int) {
 	}
 }
 
-func (l *LRU[K, V]) del(pos int) {
-	it := &l.items[pos]
-	l.unlink(it)
+func (m *Map[K, V]) del(pos int) {
+	it := &m.items[pos]
+	m.unlink(it)
 	var zeroK K
 	var zeroV V
 	it.key = zeroK
 	it.value = zeroV
 
-	sz := l.Size()
+	sz := m.Size()
 	// optimization: if ctrl byte ctrl[pos-1] is free, we can flag ctrl[p] free as well
 	pp := pos - 1
 	if pp < 1 {
 		pp += sz
 	}
 	var flag uint8 = free
-	if l.ctrl[pp] != free {
+	if m.ctrl[pp] != free {
 		flag = deleted
-		l.dead++
+		m.dead++
 	}
-	l.ctrl[pos] = flag
+	m.ctrl[pos] = flag
 	if pos < groupSize {
-		l.ctrl[pos+sz] = flag
+		m.ctrl[pos+sz] = flag
 	}
-	l.live--
+	m.live--
 }
 
-func (l *LRU[K, V]) unlink(it *item[K, V]) {
+func (m *Map[K, V]) unlink(it *item[K, V]) {
 	next := it.next
 	prev := it.prev
-	l.items[prev].next = next
-	l.items[next].prev = prev
+	m.items[prev].next = next
+	m.items[next].prev = prev
 }
 
-func (l *LRU[K, V]) toFront(it *item[K, V], i int) {
-	head := &l.items[0]
+func (m *Map[K, V]) toFront(it *item[K, V], i int) {
+	head := &m.items[0]
 	next := head.next
 	it.prev = 0
 	it.next = next
 	head.next = i
-	l.items[next].prev = i
+	m.items[next].prev = i
 }

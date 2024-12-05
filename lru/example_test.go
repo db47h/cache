@@ -19,7 +19,7 @@ type CachedFile struct {
 }
 
 type HttpCache struct {
-	lru  lru.LRU[string, CachedFile]
+	lru  lru.Map[string, CachedFile]
 	size int64
 	cap  int64
 }

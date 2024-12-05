@@ -24,22 +24,22 @@ var td = []struct {
 	// NO!
 }
 
-func populate() *lru.LRU[string, int] {
-	var l lru.LRU[string, int]
+func populate() *lru.Map[string, int] {
+	var m lru.Map[string, int]
 	for _, d := range td {
-		l.Set(d.key, d.value)
+		m.Set(d.key, d.value)
 	}
-	return &l
+	return &m
 }
 
-func TestLRU_Set(t *testing.T) {
-	l := populate()
-	if l.Len() != len(td) {
-		t.Fatalf("size mismatch: want %d, got %d", len(td), l.Len())
+func TestMap_Set(t *testing.T) {
+	m := populate()
+	if m.Len() != len(td) {
+		t.Fatalf("size mismatch: want %d, got %d", len(td), m.Len())
 	}
 
 	// check item ordering
-	k, v, ok := l.MostRecent()
+	k, v, ok := m.MostRecent()
 	if !ok {
 		t.Fatal("MostRecent did not return any value")
 	}
@@ -47,7 +47,7 @@ func TestLRU_Set(t *testing.T) {
 	if k != it.key || v != it.value {
 		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v, ok = l.LeastRecent()
+	k, v, ok = m.LeastRecent()
 	if !ok {
 		t.Fatal("LeastRecent did not return any value")
 	}
@@ -57,49 +57,43 @@ func TestLRU_Set(t *testing.T) {
 	}
 }
 
-type cappedLRU[K comparable, V any] struct {
-	lru.LRU[K, V]
+type cappedMap[K comparable, V any] struct {
+	lru.Map[K, V]
 	capacity int
 }
 
-func newLRU[K comparable, V any](capacity int) *cappedLRU[K, V] {
-	var l cappedLRU[K, V]
-	l.capacity = capacity
-	l.Init(lru.WithCapacity(capacity))
-	return &l
+func newMap[K comparable, V any](capacity int) *cappedMap[K, V] {
+	var m cappedMap[K, V]
+	m.capacity = capacity
+	m.Init(lru.WithCapacity(capacity))
+	return &m
 }
 
-func (l *cappedLRU[K, V]) onEvict(K, V) bool {
-	return l.Len() > l.capacity
+func (m *cappedMap[K, V]) onEvict(K, V) bool {
+	return m.Len() > m.capacity
 }
 
-func (l *cappedLRU[K, V]) Set(key K, value V) {
-	if _, repl := l.LRU.Set(key, value); !repl {
-		l.Evict(l.onEvict)
+func (m *cappedMap[K, V]) Set(key K, value V) {
+	if _, repl := m.Map.Set(key, value); !repl {
+		m.Evict(m.onEvict)
 	}
 }
 
-func (l *cappedLRU[K, V]) Delete(key K) {
-	if _, del := l.LRU.Delete(key); del {
-		l.Evict(l.onEvict)
-	}
-}
-
-func TestLRU_Set_onEvict(t *testing.T) {
-	l := newLRU[string, int](2)
+func TestMap_Set_onEvict(t *testing.T) {
+	m := newMap[string, int](2)
 	for _, d := range td {
-		l.Set(d.key, d.value)
+		m.Set(d.key, d.value)
 	}
 
 	// onEvict is called after entry update or insertion, so we expect only two items
 	// left.
 	expectedSize := 2
 
-	if l.Len() != expectedSize {
-		t.Fatalf("Size(): expected %d; got %d", expectedSize, l.Len())
+	if m.Len() != expectedSize {
+		t.Fatalf("Size(): expected %d; got %d", expectedSize, m.Len())
 	}
 
-	k, v, ok := l.MostRecent()
+	k, v, ok := m.MostRecent()
 	if !ok {
 		t.Fatal("MostRecent did not return any value")
 	}
@@ -107,7 +101,7 @@ func TestLRU_Set_onEvict(t *testing.T) {
 	if k != it.key || v != it.value {
 		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v, ok = l.LeastRecent()
+	k, v, ok = m.LeastRecent()
 	if !ok {
 		t.Fatal("LeastRecent did not return any value")
 	}
@@ -117,14 +111,14 @@ func TestLRU_Set_onEvict(t *testing.T) {
 	}
 }
 
-func TestLRU_Get(t *testing.T) {
-	l := populate()
+func TestMap_Get(t *testing.T) {
+	m := populate()
 	for i, d := range td {
-		v, ok := l.Get(d.key)
+		v, ok := m.Get(d.key)
 		if !ok || v != d.value {
 			t.Errorf("Get(%q): expected %d, %v; got %d, %v", d.key, d.value, true, v, ok)
 		}
-		k, v, ok := l.MostRecent()
+		k, v, ok := m.MostRecent()
 		if !ok {
 			t.Fatal("MostRecent did not return any value")
 		}
@@ -132,7 +126,7 @@ func TestLRU_Get(t *testing.T) {
 			t.Fatalf("MostRecent: expected %s, %d; got %s, %d", d.key, d.value, k, v)
 		}
 
-		k, v, ok = l.LeastRecent()
+		k, v, ok = m.LeastRecent()
 		if !ok {
 			t.Fatal("LeastRecent did not return any value")
 		}
@@ -142,22 +136,22 @@ func TestLRU_Get(t *testing.T) {
 		}
 	}
 
-	l.Set("mercury", 9)
-	v, ok := l.Get("mercury")
+	m.Set("mercury", 9)
+	v, ok := m.Get("mercury")
 	if !ok || v != 9 {
 		t.Errorf("Get(): expected %d, %v; got %d, %v", 9, true, v, ok)
 	}
 
-	v, ok = l.Get("pluto")
+	v, ok = m.Get("pluto")
 	if ok {
 		t.Errorf("Get(\"pluto\"): expected %v; %v", false, ok)
 	}
 }
 
-func TestLRU_All(t *testing.T) {
-	l := populate()
+func TestMap_All(t *testing.T) {
+	m := populate()
 	i := 0
-	for k, v := range l.All() {
+	for k, v := range m.All() {
 		it := &td[i]
 		if k != it.key || v != it.value {
 			t.Fatalf("All(): expected %s, %d; got %s, %d", it.key, it.value, k, v)
@@ -165,14 +159,14 @@ func TestLRU_All(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("LRU.All returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.All returned %d items, expected %d", i, len(td))
 	}
 }
 
-func TestLRU_Keys(t *testing.T) {
-	l := populate()
+func TestMap_Keys(t *testing.T) {
+	m := populate()
 	i := 0
-	for k := range l.Keys() {
+	for k := range m.Keys() {
 		key := td[i].key
 		if k != key {
 			t.Fatalf("Keys(): expected %s; got %s", key, k)
@@ -180,14 +174,14 @@ func TestLRU_Keys(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("LRU.Keys returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.Keys returned %d items, expected %d", i, len(td))
 	}
 }
 
-func TestLRU_Values(t *testing.T) {
-	l := populate()
+func TestMap_Values(t *testing.T) {
+	m := populate()
 	i := 0
-	for v := range l.Values() {
+	for v := range m.Values() {
 		value := td[i].value
 		if v != value {
 			t.Fatalf("Values(): expected %d; got %d", value, v)
@@ -195,19 +189,19 @@ func TestLRU_Values(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("LRU.Keys returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.Keys returned %d items, expected %d", i, len(td))
 	}
 }
 
-func TestLRU_Delete(t *testing.T) {
+func TestMap_Delete(t *testing.T) {
 	xo := New64S()
-	l := populate()
+	m := populate()
 
 	seed := time.Now().UnixNano()
-	for i := 0; i < 1000 && l.Len() > 0; i++ {
+	for i := 0; i < 1000 && m.Len() > 0; i++ {
 		j := xo.IntN(len(td))
-		l.Delete(td[j].key)
-		if _, ok := l.Get(td[j].key); ok {
+		m.Delete(td[j].key)
+		if _, ok := m.Get(td[j].key); ok {
 			t.Logf("seed %d", seed)
 			t.Fatalf("Delete(%s) failed", td[j].key)
 		}
@@ -216,13 +210,13 @@ func TestLRU_Delete(t *testing.T) {
 
 const capacity = 1 << 20
 
-func Benchmark_LRU_int_int(b *testing.B) {
+func Benchmark_Map_int_int(b *testing.B) {
 	lfs := []float64{.9, .8, .7}
 	hrs := []int{90, 75, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {
 			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
-				bench_LRU_int_int(lf, h, b)
+				bench_Map_int_int(lf, h, b)
 			})
 		}
 	}
@@ -230,49 +224,49 @@ func Benchmark_LRU_int_int(b *testing.B) {
 
 // typical workload for a cache were we fetch entries and create one if not found
 // with the given hit ratio (expressed as hit%)
-func bench_LRU_int_int(lf float64, hitp int, b *testing.B) {
+func bench_Map_int_int(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	l := newLRU[int, int](capacity)
+	m := newMap[int, int](capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	for i := 0; i < maxItemCount; i++ {
-		l.Set(i, i)
+		m.Set(i, i)
 	}
 	b.ResetTimer()
 	for range b.N {
 		i := xo.IntN(sampleSize)
-		if _, ok := l.Get(i); !ok {
-			l.Set(i, i)
+		if _, ok := m.Get(i); !ok {
+			m.Set(i, i)
 		}
 	}
 }
 
-func Benchmark_LRU_string_string(b *testing.B) {
+func Benchmark_Map_string_string(b *testing.B) {
 	lfs := []float64{.9, .8, .7}
 	hrs := []int{90, 75, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {
 			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
-				bench_LRU_string_string(lf, h, b)
+				bench_Map_string_string(lf, h, b)
 			})
 		}
 	}
 }
 
-func bench_LRU_string_string(lf float64, hitp int, b *testing.B) {
+func bench_Map_string_string(lf float64, hitp int, b *testing.B) {
 	maxItemCount := int(capacity * lf)
 	xo := New64S()
-	l := newLRU[string, string](capacity)
+	m := newMap[string, string](capacity)
 	sampleSize := maxItemCount * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxItemCount; i++ {
-		l.Set(s[i], s[i])
+		m.Set(s[i], s[i])
 	}
 	b.ResetTimer()
 	for range b.N {
 		i := xo.IntN(sampleSize)
-		if _, ok := l.Get(s[i]); !ok {
-			l.Set(s[i], s[i])
+		if _, ok := m.Get(s[i]); !ok {
+			m.Set(s[i], s[i])
 		}
 	}
 }
