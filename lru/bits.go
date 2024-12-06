@@ -25,7 +25,7 @@ func splitHash(hash uint64) (h1 uint, h2 uint8) {
 
 const (
 	empty     = 0
-	deleted   = 1
+	deleted   = 2 // see [matchEmpty]
 	setMask   = 0x80
 	groupSize = 8
 
@@ -42,14 +42,35 @@ func newBitset(c *uint8) bitset {
 	return bitset(binary.LittleEndian.Uint64(b[:]))
 }
 
-func (s bitset) matchNotSet() bitset      { return (s & hiBits) ^ hiBits }
-func (s bitset) matchEmpty() bitset       { return (s - loBits) & ^s & hiBits }
-func (s bitset) matchZero() bitset        { return (s - loBits) & ^s & hiBits }
-func (s bitset) matchByte(b uint8) bitset { return (s ^ (loBits * bitset(b))).matchZero() }
+// matchNotSet matches slots that are either empty or deleted.
+func (s bitset) matchNotSet() match { return (match(s) & hiBits) ^ hiBits }
 
-func (s *bitset) nextMatch() int {
-	n := bits.TrailingZeros64(uint64(*s))
+// matchSet matches slots that are set.
+func (s bitset) matchSet() match { return match(s) & hiBits }
+
+// matchEmpty matches empty slots. Like [matchZero], [nextMatch] could yield false
+// positives for any 0x0100 seqence. This is why [deleted] is 2.
+func (s bitset) matchEmpty() match { return (match(s) - loBits) & ^match(s) & hiBits }
+
+// matchZero returns a non zero bitset if and only if b contains any zero byte.
+// Calling [nextMatch] on the returned bitset may yield false positives if b contains any 0x0100 sequence.
+func (s bitset) matchZero() match { return (match(s) - loBits) & ^match(s) & hiBits }
+
+// matchByte returns a non zero bitset if and only if b contains any byte matching b.
+func (s bitset) matchByte(b uint8) match { return (s ^ (loBits * bitset(b))).matchZero() }
+
+type match uint64
+
+// next returns the offset from the start of the bitset to the next match.
+func (m *match) next() int {
+	n := bits.TrailingZeros64(uint64(*m))
 	// shift by an unsigned value to avoid internal checks for negative shift amounts
-	*s &= ^(1 << uint(n))
+	*m &= ^(1 << uint(n))
 	return n >> 3
 }
+
+// first returns the position of the first match. Does not update m.
+func (m match) first() int { return bits.TrailingZeros64(uint64(m)) >> 3 }
+
+// firstFromEnd returns the position of the first match, counting from the end of m. Does not update m.
+func (m match) firstFromEnd() int { return bits.LeadingZeros64(uint64(m)) >> 3 }

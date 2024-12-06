@@ -61,21 +61,13 @@ func newMap[K comparable, V any](max, capacity int) *cappedMap[K, V] {
 	var m cappedMap[K, V]
 	m.capacity = capacity
 	m.max = max
-	m.Init(lru.WithCapacity(capacity))
+	m.Init(capacity)
 	return &m
 }
 
 func (m *cappedMap[K, V]) evict() {
 	for m.Len() > m.max {
 		m.DeleteLRU()
-		// TODO: remove this
-		// more convoluted version that might
-		// help catch some bugs.
-		// k, _ := m.LeastRecent()
-		// _, ok := m.Delete(k)
-		// if !ok {
-		// 	panic("Delete(LeastRecent()): key not found")
-		// }
 	}
 }
 

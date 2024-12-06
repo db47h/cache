@@ -32,6 +32,11 @@ import (
 	"github.com/dolthub/maphash"
 )
 
+const (
+	minCapacity = 16
+	growthRatio = 1.5
+)
+
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
 	hasher maphash.Hasher[K]
@@ -39,7 +44,6 @@ type Map[K comparable, V any] struct {
 	items  []item[K, V]
 	live   int
 	dead   int
-	gRatio float64
 }
 
 type item[K comparable, V any] struct {
@@ -49,16 +53,19 @@ type item[K comparable, V any] struct {
 	next  int
 }
 
-func NewMap[K comparable, V any](opts ...Option) *Map[K, V] {
+func NewMap[K comparable, V any](capacity int) *Map[K, V] {
 	var m Map[K, V]
-	m.Init(opts...)
+	m.Init(capacity)
 	return &m
 }
 
-func (m *Map[K, V]) Init(opts ...Option) {
-	o := getOpts(opts)
-	m.gRatio = o.growthRatio
-	m.grow(o.capacity)
+func (m *Map[K, V]) Init(capacity int) {
+	m.items = nil
+	m.ctrl = nil
+	m.live = 0
+	m.dead = 0
+	// TODO: adjust capacity based on effective achievable load factor.
+	m.rehashOrGrow(capacity)
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -167,8 +174,10 @@ func (m *Map[K, V]) Len() int { return m.live }
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	sz := m.Size()
 	// rehash if there are less than 1/16 free slots.
-	if sz-m.live-m.dead <= sz>>4 {
-		sz = m.grow(max(minSize, sz))
+	// TODO: check that we have at least 1 free slot and empty < sz >> 4, this is to squeeze one more item
+	// before the caller calls evict.
+	if sz-m.live-m.dead <= int(uint(sz)>>4) {
+		sz = m.rehashOrGrow(sz)
 		hash = m.hasher.Hash(key)
 	}
 	h1, h2 := splitHash(hash)
@@ -176,13 +185,13 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 again:
 	e := newBitset(&m.ctrl[pos]).matchNotSet()
 	if e == 0 {
-		pos = add(pos, groupSize, sz)
+		pos = addPos(pos, groupSize, sz)
 		goto again
 	}
-	pos = add(pos, e.nextMatch(), sz)
+	pos = addPos(pos, e.next(), sz)
 	m.live++
 	c := &m.ctrl[pos]
-	m.dead -= int(*c) // Deleted is 1, Free = 0
+	m.dead -= int(*c) >> 1 // deleted is 2, Free = 0
 	*c = h2
 	if pos < groupSize {
 		// the table is 1 indexed, so we replicate items for pos in [1, GroupSize), not [0, GroupSize-1)
@@ -195,22 +204,21 @@ again:
 	m.toFront(it, pos)
 }
 
-// add adds x to pos and returns the new position in [1, sz]
-func add(pos, x, sz int) int {
-	pos += x
-	if pos > sz {
-		pos -= sz
-	}
-	return pos
-}
-
-func (m *Map[K, V]) grow(sz int) int {
+func (m *Map[K, V]) rehashOrGrow(sz int) int {
 	// grow the table only if load factor >
-	// << 1 -> 5/8 0.625
-	// << 2 -> 3/4 0.75
-	// << 3 -> 5/6 0.833
+	// 5/8 (0.625) -> m.dead << 1
+	// 3/4 (0.75)  -> m.dead << 2
+	// 5/6 (0.833) -> m.dead << 3
+	// With 0.75 and growing the table by a factor of 1.5, the load factor is
+	// kept between 0.5 and 0.935
+	// Benchmarks showed that 0.75 is the best option here. Thes also showed that we can achieve
+	// an effective load factor of 0.86.
+	// TODO: why 0.86? And test <<3 and growth ratio 5/3
 	if m.live > m.dead<<2 {
-		sz = int(math.Ceil(float64(sz) * m.gRatio))
+		sz = int(math.Ceil(float64(sz) * growthRatio))
+	}
+	if sz < minCapacity {
+		sz = minCapacity
 	}
 	src := m.items
 	m.hasher = maphash.NewHasher[K]()
@@ -229,6 +237,8 @@ func (m *Map[K, V]) grow(sz int) int {
 	return sz
 }
 
+// find returns the hash for the given key and its position. If the key is not found,
+// the returned position is 0. If the [Map] has not been initialized yet, the hash will be zero.
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if len(m.ctrl) == 0 {
 		return 0, 0
@@ -240,7 +250,8 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 	for {
 		s := newBitset(&m.ctrl[pos])
 		for mb := s.matchByte(h2); mb != 0; {
-			p := add(pos, mb.nextMatch(), sz)
+			p := addPos(pos, mb.next(), sz)
+			// mathcByte can yield false positives in rare edge cases, but this is harmless here.
 			if m.items[p].key == key {
 				return hash, p
 			}
@@ -248,7 +259,7 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 		if s.matchEmpty() != 0 {
 			return hash, 0
 		}
-		pos = add(pos, groupSize, sz)
+		pos = addPos(pos, groupSize, sz)
 	}
 }
 
@@ -260,12 +271,36 @@ func (m *Map[K, V]) del(pos int) {
 	it.key = zeroK
 	it.value = zeroV
 
+	sz := m.Size()
+	m.live--
+	// if there is no probe window around pos that has ever been seen as a full group
+	// then we can mark pos as empty instead of deleted.
+	// e.g.:    0 1 1 1 1 P 1 1 0
+	// where 0 is an empty slot, 1 is set (or deleted) and P is pos.
+	//
+	// Assuming that slot P is set, there is no probe window that has seen the
+	// neighborhood of P as a full group.
+	// The conditions are:
+	//  - there must be an empty slot both before and after pos
+	//  - the number of consecitve non empty slots around pos must be < groupSize
+	c := &m.ctrl[pos]
+	if after := newBitset(c).matchEmpty(); after != 0 {
+		if before := newBitset(&m.ctrl[subPos(pos, groupSize, sz)]).matchEmpty(); before != 0 {
+			if before.firstFromEnd()+after.first() < groupSize {
+				*c = empty
+				if pos < groupSize {
+					m.ctrl[pos+sz] = empty
+				}
+				return
+			}
+		}
+	}
+
 	m.ctrl[pos] = deleted
 	if pos < groupSize {
-		m.ctrl[pos+m.Size()] = deleted
+		m.ctrl[pos+sz] = deleted
 	}
 	m.dead++
-	m.live--
 }
 
 func (m *Map[K, V]) unlink(it *item[K, V]) {
@@ -282,4 +317,22 @@ func (m *Map[K, V]) toFront(it *item[K, V], i int) {
 	it.next = next
 	head.next = i
 	m.items[next].prev = i
+}
+
+// addPos adds x to pos and returns the new position in [1, sz]
+func addPos(pos, x, sz int) int {
+	pos += x
+	if pos > sz {
+		pos -= sz
+	}
+	return pos
+}
+
+// addPos subtracts x from pos and returns the new position in [1, sz]
+func subPos(pos, x, sz int) int {
+	pos -= x
+	if pos < 1 {
+		pos += sz
+	}
+	return pos
 }

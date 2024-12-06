@@ -84,12 +84,12 @@ func Test_bitsset_matchNotSet(t *testing.T) {
 		if !assert.True(t, m != 0) {
 			t.Fatal()
 		}
-		p := m.nextMatch()
+		p := m.next()
 		if !assert.Equal(t, f1, pos+p) || !assert.True(t, cs[f1]&setMask == 0) {
 			t.Fatalf("F1 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 		}
 		if f1 != f2 {
-			p = m.nextMatch()
+			p = m.next()
 			if !assert.Equal(t, f2, pos+p) || !assert.True(t, cs[f2]&setMask == 0) {
 				t.Fatalf("F2 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 			}
@@ -118,12 +118,12 @@ func Test_bitset_matchByte(t *testing.T) {
 		if !assert.True(t, m != 0) {
 			t.Fatal()
 		}
-		p := m.nextMatch()
+		p := m.next()
 		if !assert.Equal(t, f1, pos+p) || !assert.Equal(t, v, cs[pos+p]) {
 			t.Fatalf("F1 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 		}
 		if f1 != f2 {
-			p := m.nextMatch()
+			p := m.next()
 			if !assert.Equal(t, f2, pos+p) || !assert.Equal(t, v, cs[pos+p]) {
 				t.Fatalf("F2 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
 			}
