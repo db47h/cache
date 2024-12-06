@@ -33,17 +33,18 @@ import (
 )
 
 const (
-	minCapacity = 16
+	minCapacity = groupSize
 	growthRatio = 1.5
 )
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hasher maphash.Hasher[K]
-	ctrl   []uint8
-	items  []item[K, V]
-	live   int
-	dead   int
+	hasher   maphash.Hasher[K]
+	ctrl     []uint8
+	items    []item[K, V]
+	active   int
+	deleted  int
+	capacity int
 }
 
 type item[K comparable, V any] struct {
@@ -62,10 +63,11 @@ func NewMap[K comparable, V any](capacity int) *Map[K, V] {
 func (m *Map[K, V]) Init(capacity int) {
 	m.items = nil
 	m.ctrl = nil
-	m.live = 0
-	m.dead = 0
+	m.active = 0
+	m.deleted = 0
+	m.capacity = capacity
 	// TODO: adjust capacity based on effective achievable load factor.
-	m.rehashOrGrow(capacity)
+	m.rehashOrGrow()
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -165,21 +167,19 @@ func (m *Map[K, V]) MostRecent() (K, V) {
 	return m.items[i].key, m.items[i].value
 }
 
-func (m *Map[K, V]) Load() float64 { return float64(m.live) / float64(m.Size()) }
+func (m *Map[K, V]) Load() float64 { return float64(m.active) / float64(m.capacity) }
 
-func (m *Map[K, V]) Size() int { return len(m.items) - 1 }
+func (m *Map[K, V]) Capacity() int { return m.capacity }
 
-func (m *Map[K, V]) Len() int { return m.live }
+func (m *Map[K, V]) Len() int { return m.active }
 
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
-	sz := m.Size()
-	// rehash if there are less than 1/16 free slots.
-	// TODO: check that we have at least 1 free slot and empty < sz >> 4, this is to squeeze one more item
-	// before the caller calls evict.
-	if sz-m.live-m.dead <= int(uint(sz)>>4) {
-		sz = m.rehashOrGrow(sz)
+	sz := m.capacity
+	if m.needRehash() {
+		m.rehashOrGrow()
 		hash = m.hasher.Hash(key)
 	}
+	sz = m.capacity
 	h1, h2 := splitHash(hash)
 	pos := reduceRange(h1, sz) + 1 // pos in range [1..Size]
 again:
@@ -189,9 +189,9 @@ again:
 		goto again
 	}
 	pos = addPos(pos, e.next(), sz)
-	m.live++
+	m.active++
 	c := &m.ctrl[pos]
-	m.dead -= int(*c) >> 1 // deleted is 2, Free = 0
+	m.deleted -= int(*c) >> 1 // deleted is 2, Free = 0
 	*c = h2
 	if pos < groupSize {
 		// the table is 1 indexed, so we replicate items for pos in [1, GroupSize), not [0, GroupSize-1)
@@ -204,48 +204,15 @@ again:
 	m.toFront(it, pos)
 }
 
-func (m *Map[K, V]) rehashOrGrow(sz int) int {
-	// grow the table only if load factor >
-	// 5/8 (0.625) -> m.dead << 1
-	// 3/4 (0.75)  -> m.dead << 2
-	// 5/6 (0.833) -> m.dead << 3
-	// With 0.75 and growing the table by a factor of 1.5, the load factor is
-	// kept between 0.5 and 0.935
-	// Benchmarks showed that 0.75 is the best option here. Thes also showed that we can achieve
-	// an effective load factor of 0.86.
-	// TODO: why 0.86? And test <<3 and growth ratio 5/3
-	if m.live > m.dead<<2 {
-		sz = int(math.Ceil(float64(sz) * growthRatio))
-	}
-	if sz < minCapacity {
-		sz = minCapacity
-	}
-	src := m.items
-	m.hasher = maphash.NewHasher[K]()
-	m.items = make([]item[K, V], sz+1)
-	m.ctrl = make([]uint8, sz+1+groupSize-1)
-	m.live = 0
-	m.dead = 0
-	if len(src) == 0 {
-		return sz
-	}
-	for i := src[0].prev; i != 0; {
-		it := &src[i]
-		m.insert(m.hasher.Hash(it.key), it.key, it.value)
-		i = it.prev
-	}
-	return sz
-}
-
 // find returns the hash for the given key and its position. If the key is not found,
 // the returned position is 0. If the [Map] has not been initialized yet, the hash will be zero.
 func (m *Map[K, V]) find(key K) (uint64, int) {
-	if len(m.ctrl) == 0 {
+	if m.capacity == 0 {
 		return 0, 0
 	}
 	hash := m.hasher.Hash(key)
 	h1, h2 := splitHash(hash)
-	sz := m.Size()
+	sz := m.capacity
 	pos := reduceRange(h1, sz) + 1
 	for {
 		s := newBitset(&m.ctrl[pos])
@@ -271,8 +238,8 @@ func (m *Map[K, V]) del(pos int) {
 	it.key = zeroK
 	it.value = zeroV
 
-	sz := m.Size()
-	m.live--
+	sz := m.capacity
+	m.active--
 	// if there is no probe window around pos that has ever been seen as a full group
 	// then we can mark pos as empty instead of deleted.
 	// e.g.:    0 1 1 1 1 P 1 1 0
@@ -300,7 +267,53 @@ func (m *Map[K, V]) del(pos int) {
 	if pos < groupSize {
 		m.ctrl[pos+sz] = deleted
 	}
-	m.dead++
+	m.deleted++
+}
+
+func (m *Map[K, V]) rehashOrGrow() {
+	sz := m.resize()
+	src := m.items
+	m.hasher = maphash.NewHasher[K]()
+	m.items = make([]item[K, V], sz+1)
+	m.ctrl = make([]uint8, sz+1+groupSize-1)
+	m.active = 0
+	m.deleted = 0
+	m.capacity = sz
+	if len(src) == 0 {
+		// first init, skip hashing
+		return
+	}
+	for i := src[0].prev; i != 0; {
+		it := &src[i]
+		m.insert(m.hasher.Hash(it.key), it.key, it.value)
+		i = it.prev
+	}
+}
+
+func (m *Map[K, V]) needRehash() bool {
+	// rehash if there are less than 1/16 free slots or only one.
+	empty := m.capacity - m.active - m.deleted
+	return empty < int(uint(m.capacity)>>4) || empty <= 1
+}
+
+func (m *Map[K, V]) resize() int {
+	sz := m.capacity
+	// grow the table only if load factor >
+	// 5/8 (0.625) -> m.dead << 1
+	// 3/4 (0.75)  -> m.dead << 2
+	// 5/6 (0.833) -> m.dead << 3
+	// With 0.75 and growing the table by a factor of 1.5, the load factor is
+	// kept between 0.5 and 0.935
+	// Benchmarks showed that 0.75 is the best option here. Thes also showed that we can achieve
+	// an effective load factor of 0.86.
+	// TODO: why 0.86? And test <<3 and growth ratio 5/3
+	if m.active > m.deleted<<2 {
+		sz = int(math.Ceil(float64(sz) * growthRatio))
+	}
+	if sz < minCapacity {
+		sz = minCapacity
+	}
+	return sz
 }
 
 func (m *Map[K, V]) unlink(it *item[K, V]) {
