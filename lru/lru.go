@@ -66,7 +66,6 @@ func (m *Map[K, V]) Init(capacity int) {
 	m.active = 0
 	m.deleted = 0
 	m.capacity = capacity
-	// TODO: adjust capacity based on effective achievable load factor.
 	m.rehashOrGrow()
 }
 
@@ -110,36 +109,44 @@ func (m *Map[K, V]) Delete(key K) (V, bool) {
 	return zero, false
 }
 
-// All returns an iterator for all keys in the Map, lru first. The caller must not delete items while iterating.
+// All returns an iterator for all keys in the Map, lru first.
 func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 	return func(yield func(K) bool) {
-		for i := m.items[0].prev; i != 0 && yield(m.items[i].key); i = m.items[i].prev {
-		}
-	}
-}
-
-// All returns an iterator for all values in the Map, lru first. The caller must not delete items while iterating.
-func (m *Map[K, V]) Values() func(yield func(V) bool) {
-	return func(yield func(V) bool) {
-		for i := m.items[0].prev; i != 0 && yield(m.items[i].value); i = m.items[i].prev {
-		}
-	}
-}
-
-// All returns an iterator for all key value pairs in the Map, lru first. The caller must not delete items while iterating.
-func (m *Map[K, V]) All() func(yield func(K, V) bool) {
-	// TODO: allow eviction of items while going through the map.
-	// this could be a good replacement for Evict. We could also turn Evict into an iterator?
-	return func(yield func(K, V) bool) {
-		// for i := l.items[0].prev; i != 0 && yield(l.items[i].key, l.items[i].value); i = l.items[i].prev {
-		// }
 		for i := m.items[0].prev; i != 0; {
 			it := &m.items[i]
+			prev := it.prev
+			if !yield(it.key) {
+				break
+			}
+			i = prev
+		}
+	}
+}
+
+// All returns an iterator for all values in the Map, lru first.
+func (m *Map[K, V]) Values() func(yield func(V) bool) {
+	return func(yield func(V) bool) {
+		for i := m.items[0].prev; i != 0; {
+			it := &m.items[i]
+			prev := it.prev
+			if !yield(it.value) {
+				break
+			}
+			i = prev
+		}
+	}
+}
+
+// All returns an iterator for all key value pairs in the Map, lru first.
+func (m *Map[K, V]) All() func(yield func(K, V) bool) {
+	return func(yield func(K, V) bool) {
+		for i := m.items[0].prev; i != 0; {
+			it := &m.items[i]
+			prev := it.prev
 			if !yield(it.key, it.value) {
 				break
 			}
-			// deletes do not alter it.prev
-			i = it.prev
+			i = prev
 		}
 	}
 }
@@ -304,9 +311,7 @@ func (m *Map[K, V]) resize() int {
 	// 5/6 (0.833) -> m.dead << 3
 	// With 0.75 and growing the table by a factor of 1.5, the load factor is
 	// kept between 0.5 and 0.935
-	// Benchmarks showed that 0.75 is the best option here. Thes also showed that we can achieve
-	// an effective load factor of 0.86.
-	// TODO: why 0.86? And test <<3 and growth ratio 5/3
+	// Benchmarks showed that 0.75 is the best option here.
 	if m.active > m.deleted<<2 {
 		sz = int(math.Ceil(float64(sz) * growthRatio))
 	}
