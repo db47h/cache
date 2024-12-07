@@ -39,15 +39,15 @@ func TestMap_Set(t *testing.T) {
 	}
 
 	// check item ordering
-	k, v := m.MostRecent()
+	k, v := m.MRU()
 	it := &td[len(td)-1]
 	if k != it.key || v != it.value {
-		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
+		t.Fatalf("MRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v = m.LeastRecent()
+	k, v = m.LRU()
 	it = &td[0]
 	if k != it.key || v != it.value {
-		t.Fatalf("LeastRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
+		t.Fatalf("LRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
 }
 
@@ -91,15 +91,15 @@ func TestMap_Set_withEvict(t *testing.T) {
 		t.Fatalf("Size(): expected %d; got %d", expectedSize, m.Len())
 	}
 
-	k, v := m.MostRecent()
+	k, v := m.MRU()
 	it := &td[len(td)-1]
 	if k != it.key || v != it.value {
-		t.Fatalf("MostRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
+		t.Fatalf("MRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
-	k, v = m.LeastRecent()
+	k, v = m.LRU()
 	it = &td[len(td)-expectedSize]
 	if k != it.key || v != it.value {
-		t.Fatalf("LeastRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
+		t.Fatalf("LRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 	}
 }
 
@@ -110,21 +110,21 @@ func TestMap_Get(t *testing.T) {
 		if !ok || v != d.value {
 			t.Errorf("Get(%q): expected %d, %v; got %d, %v", d.key, d.value, true, v, ok)
 		}
-		k, v := m.MostRecent()
+		k, v := m.MRU()
 		if !ok {
-			t.Fatal("MostRecent did not return any value")
+			t.Fatal("MRU did not return any value")
 		}
 		if k != d.key || v != d.value {
-			t.Fatalf("MostRecent: expected %s, %d; got %s, %d", d.key, d.value, k, v)
+			t.Fatalf("MRU: expected %s, %d; got %s, %d", d.key, d.value, k, v)
 		}
 
-		k, v = m.LeastRecent()
+		k, v = m.LRU()
 		if !ok {
-			t.Fatal("LeastRecent did not return any value")
+			t.Fatal("LRU did not return any value")
 		}
 		it := &td[(i+1)%len(td)] // this *should* be the lru
 		if k != it.key || v != it.value {
-			t.Fatalf("LeastRecent: expected %s, %d; got %s, %d", it.key, it.value, k, v)
+			t.Fatalf("LRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
 		}
 	}
 
@@ -200,7 +200,7 @@ func TestMap_Delete(t *testing.T) {
 	}
 }
 
-const capacity = 1 << 20
+const capacity = 1 << 16
 
 func Benchmark_Map_int_int(b *testing.B) {
 	lfs := []float64{.9, .8, .7}

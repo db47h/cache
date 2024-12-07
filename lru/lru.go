@@ -163,13 +163,13 @@ func (m *Map[K, V]) DeleteLRU() (key K, value V) {
 	return
 }
 
-func (m *Map[K, V]) LeastRecent() (K, V) {
+func (m *Map[K, V]) LRU() (K, V) {
 	i := m.items[0].prev
 	// l.items[0].key and l.items[0].value are zero values for K and V
 	return m.items[i].key, m.items[i].value
 }
 
-func (m *Map[K, V]) MostRecent() (K, V) {
+func (m *Map[K, V]) MRU() (K, V) {
 	i := m.items[0].next
 	return m.items[i].key, m.items[i].value
 }
@@ -306,9 +306,9 @@ func (m *Map[K, V]) needRehash() bool {
 func (m *Map[K, V]) resize() int {
 	sz := m.capacity
 	// grow the table only if load factor >
-	// 5/8 (0.625) -> m.dead << 1
-	// 3/4 (0.75)  -> m.dead << 2
-	// 5/6 (0.833) -> m.dead << 3
+	// 5/8 (0.625) -> m.active > m.dead << 1
+	// 3/4 (0.75)  -> m.active > m.dead << 2
+	// 5/6 (0.833) -> m.active > m.dead << 3
 	// With 0.75 and growing the table by a factor of 1.5, the load factor is
 	// kept between 0.5 and 0.935
 	// Benchmarks showed that 0.75 is the best option here.
