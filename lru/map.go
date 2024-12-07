@@ -32,11 +32,6 @@ import (
 	"github.com/dolthub/maphash"
 )
 
-const (
-	minCapacity = groupSize
-	growthRatio = 1.5
-)
-
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
 	hasher   maphash.Hasher[K]
@@ -61,12 +56,15 @@ func NewMap[K comparable, V any](capacity int) *Map[K, V] {
 }
 
 func (m *Map[K, V]) Init(capacity int) {
-	m.items = nil
-	m.ctrl = nil
+	if capacity < minCapacity {
+		capacity = minCapacity
+	}
+	m.hasher = maphash.NewHasher[K]()
+	m.items = make([]item[K, V], capacity+1)
+	m.ctrl = make([]uint8, capacity+1+groupSize-1)
 	m.active = 0
 	m.deleted = 0
 	m.capacity = capacity
-	m.rehashOrGrow()
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -182,7 +180,7 @@ func (m *Map[K, V]) Len() int { return m.active }
 
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	sz := m.capacity
-	if m.needRehash() {
+	if m.needRehashOrGrow() {
 		m.rehashOrGrow()
 		hash = m.hasher.Hash(key)
 	}
@@ -212,10 +210,11 @@ again:
 }
 
 // find returns the hash for the given key and its position. If the key is not found,
-// the returned position is 0. If the [Map] has not been initialized yet, the hash will be zero.
+// the returned position is 0.
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if m.capacity == 0 {
-		return 0, 0
+		m.Init(0)
+		return m.hasher.Hash(key), 0
 	}
 	hash := m.hasher.Hash(key)
 	h1, h2 := splitHash(hash)
@@ -277,19 +276,18 @@ func (m *Map[K, V]) del(pos int) {
 	m.deleted++
 }
 
+const (
+	minCapacity = 32
+	growthRatio = 1.5
+)
+
 func (m *Map[K, V]) rehashOrGrow() {
-	sz := m.resize()
-	src := m.items
-	m.hasher = maphash.NewHasher[K]()
-	m.items = make([]item[K, V], sz+1)
-	m.ctrl = make([]uint8, sz+1+groupSize-1)
-	m.active = 0
-	m.deleted = 0
-	m.capacity = sz
-	if len(src) == 0 {
-		// first init, skip hashing
-		return
+	sz, grow := m.resize()
+	// TODO: test rehashing in place
+	if !grow {
 	}
+	src := m.items
+	m.Init(sz)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hasher.Hash(it.key), it.key, it.value)
@@ -297,13 +295,15 @@ func (m *Map[K, V]) rehashOrGrow() {
 	}
 }
 
-func (m *Map[K, V]) needRehash() bool {
-	// rehash if there are less than 1/16 free slots or only one.
-	empty := m.capacity - m.active - m.deleted
-	return empty < int(uint(m.capacity)>>4) || empty <= 1
+// needRehashOrGrow returns true if there are less than 1/16 free slots.
+func (m *Map[K, V]) needRehashOrGrow() bool {
+	// for minCapatity 32, rhs is 2. This will force a rehash if there is only 1
+	// free slot before insert, thus making sure that there is at least 1 free
+	// slot post insert.
+	return m.capacity-m.active-m.deleted < int(uint(m.capacity)>>4)
 }
 
-func (m *Map[K, V]) resize() int {
+func (m *Map[K, V]) resize() (newSize int, resized bool) {
 	sz := m.capacity
 	// grow the table only if load factor >
 	// 5/8 (0.625) -> m.active > m.dead << 1
@@ -314,11 +314,9 @@ func (m *Map[K, V]) resize() int {
 	// Benchmarks showed that 0.75 is the best option here.
 	if m.active > m.deleted<<2 {
 		sz = int(math.Ceil(float64(sz) * growthRatio))
+		resized = true
 	}
-	if sz < minCapacity {
-		sz = minCapacity
-	}
-	return sz
+	return sz, resized
 }
 
 func (m *Map[K, V]) unlink(it *item[K, V]) {
