@@ -34,7 +34,7 @@ import (
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hasher  maphash.Hasher[K]
+	hash    func(K) uint64
 	meta    []uint8
 	items   []item[K, V]
 	active  int
@@ -60,7 +60,7 @@ func (m *Map[K, V]) Init(capacity int) {
 		capacity = minCapacity
 	}
 	m.posInfo = roundSizeUp(capacity)
-	m.hasher = maphash.NewHasher[K]()
+	m.hash = maphash.NewHasher[K]().Hash
 	m.items = make([]item[K, V], m.capacity+1)
 	m.meta = make([]uint8, m.capacity+1+groupSize-1)
 	m.active = 0
@@ -181,7 +181,7 @@ func (m *Map[K, V]) Len() int { return m.active }
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	if m.needRehashOrGrow() {
 		m.rehashOrGrow()
-		hash = m.hasher.Hash(key)
+		hash = m.hash(key)
 	}
 	h1, h2 := splitHash(hash)
 	p := m.pos(h1)
@@ -205,9 +205,9 @@ again:
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if m.capacity == 0 {
 		m.Init(0)
-		return m.hasher.Hash(key), 0
+		return m.hash(key), 0
 	}
-	hash := m.hasher.Hash(key)
+	hash := m.hash(key)
 	h1, h2 := splitHash(hash)
 	p := m.pos(h1)
 	for {
@@ -273,7 +273,7 @@ func (m *Map[K, V]) rehashOrGrow() {
 	m.Init(sz)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
-		m.insert(m.hasher.Hash(it.key), it.key, it.value)
+		m.insert(m.hash(it.key), it.key, it.value)
 		i = it.prev
 	}
 }
