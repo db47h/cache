@@ -34,12 +34,12 @@ import (
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hasher   maphash.Hasher[K]
-	ctrl     []uint8
-	items    []item[K, V]
-	active   int
-	deleted  int
-	capacity int
+	hasher  maphash.Hasher[K]
+	meta    []uint8
+	items   []item[K, V]
+	active  int
+	deleted int
+	posInfo
 }
 
 type item[K comparable, V any] struct {
@@ -59,12 +59,12 @@ func (m *Map[K, V]) Init(capacity int) {
 	if capacity < minCapacity {
 		capacity = minCapacity
 	}
+	m.posInfo = roundSizeUp(capacity)
 	m.hasher = maphash.NewHasher[K]()
-	m.items = make([]item[K, V], capacity+1)
-	m.ctrl = make([]uint8, capacity+1+groupSize-1)
+	m.items = make([]item[K, V], m.capacity+1)
+	m.meta = make([]uint8, m.capacity+1+groupSize-1)
 	m.active = 0
 	m.deleted = 0
-	m.capacity = capacity
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -179,34 +179,25 @@ func (m *Map[K, V]) Capacity() int { return m.capacity }
 func (m *Map[K, V]) Len() int { return m.active }
 
 func (m *Map[K, V]) insert(hash uint64, key K, value V) {
-	sz := m.capacity
 	if m.needRehashOrGrow() {
 		m.rehashOrGrow()
 		hash = m.hasher.Hash(key)
 	}
-	sz = m.capacity
 	h1, h2 := splitHash(hash)
-	pos := reduceRange(h1, sz) + 1 // pos in range [1..Size]
+	p := m.pos(h1)
 again:
-	e := newBitset(&m.ctrl[pos]).matchNotSet()
+	e := newBitset(&m.meta[p.offset]).matchNotSet()
 	if e == 0 {
-		pos = addPos(pos, groupSize, sz)
+		p = p.next()
 		goto again
 	}
-	pos = addPos(pos, e.next(), sz)
+	i := p.index(e.next())
 	m.active++
-	c := &m.ctrl[pos]
-	m.deleted -= int(*c) >> 1 // deleted is 2, Free = 0
-	*c = h2
-	if pos < groupSize {
-		// the table is 1 indexed, so we replicate items for pos in [1, GroupSize), not [0, GroupSize-1)
-		// note that pos can never be 0 here.
-		m.ctrl[pos+sz] = h2
-	}
-	it := &m.items[pos]
+	m.setH2(i, h2)
+	it := &m.items[i]
 	it.key = key
 	it.value = value
-	m.toFront(it, pos)
+	m.toFront(it, i)
 }
 
 // find returns the hash for the given key and its position. If the key is not found,
@@ -218,21 +209,20 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 	}
 	hash := m.hasher.Hash(key)
 	h1, h2 := splitHash(hash)
-	sz := m.capacity
-	pos := reduceRange(h1, sz) + 1
+	p := m.pos(h1)
 	for {
-		s := newBitset(&m.ctrl[pos])
+		s := newBitset(&m.meta[p.offset])
 		for mb := s.matchByte(h2); mb != 0; {
-			p := addPos(pos, mb.next(), sz)
+			i := p.index(mb.next())
 			// mathcByte can yield false positives in rare edge cases, but this is harmless here.
-			if m.items[p].key == key {
-				return hash, p
+			if m.items[i].key == key {
+				return hash, i
 			}
 		}
 		if s.matchEmpty() != 0 {
 			return hash, 0
 		}
-		pos = addPos(pos, groupSize, sz)
+		p = p.next()
 	}
 }
 
@@ -256,23 +246,16 @@ func (m *Map[K, V]) del(pos int) {
 	// The conditions are:
 	//  - there must be an empty slot both before and after pos
 	//  - the number of consecitve non empty slots around pos must be < groupSize
-	c := &m.ctrl[pos]
-	if after := newBitset(c).matchEmpty(); after != 0 {
-		if before := newBitset(&m.ctrl[subPos(pos, groupSize, sz)]).matchEmpty(); before != 0 {
+	if after := newBitset(&m.meta[pos]).matchEmpty(); after != 0 {
+		if before := newBitset(&m.meta[subModulo(pos, groupSize, sz)]).matchEmpty(); before != 0 {
 			if before.firstFromEnd()+after.first() < groupSize {
-				*c = empty
-				if pos < groupSize {
-					m.ctrl[pos+sz] = empty
-				}
+				m.clearH2(pos, empty)
 				return
 			}
 		}
 	}
 
-	m.ctrl[pos] = deleted
-	if pos < groupSize {
-		m.ctrl[pos+sz] = deleted
-	}
+	m.clearH2(pos, deleted)
 	m.deleted++
 }
 
@@ -319,6 +302,26 @@ func (m *Map[K, V]) resize() (newSize int, resized bool) {
 	return sz, resized
 }
 
+func (m *Map[K, V]) pos(hash uint) position {
+	return pos(hash, &m.posInfo)
+}
+
+func (m *Map[K, V]) setH2(index int, h2 uint8) {
+	c := &m.meta[index]
+	m.deleted -= int(*c >> 1)
+	*c = h2
+	if index < groupSize {
+		m.meta[index+m.capacity] = h2
+	}
+}
+
+func (m *Map[K, V]) clearH2(index int, h2 uint8) {
+	m.meta[index] = h2
+	if index < groupSize {
+		m.meta[index+m.capacity] = h2
+	}
+}
+
 func (m *Map[K, V]) unlink(it *item[K, V]) {
 	next := it.next
 	prev := it.prev
@@ -333,22 +336,4 @@ func (m *Map[K, V]) toFront(it *item[K, V], i int) {
 	it.next = next
 	head.next = i
 	m.items[next].prev = i
-}
-
-// addPos adds x to pos and returns the new position in [1, sz]
-func addPos(pos, x, sz int) int {
-	pos += x
-	if pos > sz {
-		pos -= sz
-	}
-	return pos
-}
-
-// addPos subtracts x from pos and returns the new position in [1, sz]
-func subPos(pos, x, sz int) int {
-	pos -= x
-	if pos < 1 {
-		pos += sz
-	}
-	return pos
 }
