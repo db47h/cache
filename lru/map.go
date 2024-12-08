@@ -59,12 +59,7 @@ func (m *Map[K, V]) Init(capacity int) {
 	if capacity < minCapacity {
 		capacity = minCapacity
 	}
-	m.sizeInfo = roundSizeUp(capacity)
-	m.hash = maphash.NewHasher[K]().Hash
-	m.items = make([]item[K, V], m.capacity+1)
-	m.meta = make([]uint8, m.capacity+1+groupSize-1)
-	m.active = 0
-	m.deleted = 0
+	m.allocTables(roundSizeUp(capacity))
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -205,7 +200,6 @@ again:
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if m.capacity == 0 {
 		m.Init(0)
-		return m.hash(key), 0
 	}
 	hash := m.hash(key)
 	h1, h2 := splitHash(hash)
@@ -242,10 +236,9 @@ func (m *Map[K, V]) del(pos int) {
 	// where 0 is an empty slot, 1 is set (or deleted) and P is pos.
 	//
 	// Assuming that slot P is set, there is no probe window that has seen the
-	// neighborhood of P as a full group.
-	// The conditions are:
+	// neighborhood of P as a full group if:
 	//  - there must be an empty slot both before and after pos
-	//  - the number of consecitve non empty slots around pos must be < groupSize
+	//  - the sequence of consecitve non empty slots invluding pos must be smaller than groupSize
 	if after := newBitset(&m.meta[pos]).matchEmpty(); after != 0 {
 		if before := newBitset(&m.meta[subModulo(pos, groupSize, sz)]).matchEmpty(); before != 0 {
 			if before.firstFromEnd()+after.first() < groupSize {
@@ -259,18 +252,47 @@ func (m *Map[K, V]) del(pos int) {
 	m.deleted++
 }
 
+func (m *Map[K, V]) allocTables(si sizeInfo) {
+	m.sizeInfo = si
+	m.hash = maphash.NewHasher[K]().Hash
+	m.items = make([]item[K, V], m.capacity+1)
+	m.meta = make([]uint8, m.capacity+1+groupSize-1)
+	m.active = 0
+	m.deleted = 0
+}
+
+func (m *Map[K, V]) rehashInPlace() {
+	src := m.items
+	m.allocTables(m.sizeInfo)
+	for i := src[0].prev; i != 0; {
+		it := &src[i]
+		m.insert(m.hash(it.key), it.key, it.value)
+		i = it.prev
+	}
+}
+
 const (
 	minCapacity = 32
 	growthRatio = 1.5
 )
 
 func (m *Map[K, V]) rehashOrGrow() {
-	sz, grow := m.resize()
-	// TODO: test rehashing in place
-	if !grow {
+	si := m.sizeInfo
+	// rehash in place if load factor >
+	// 5/8 (0.625) -> m.active > m.dead << 1
+	// 3/4 (0.75)  -> m.active > m.dead << 2
+	// 5/6 (0.833) -> m.active > m.dead << 3
+	// 3/4 is (15/16) / (1 + 1/4). Changing the max load factor would affect these values.
+	// With 0.75 and growing the table by a factor of 1.5, the load factor is
+	// kept between 0.5 and 0.935
+	// Benchmarks showed that 0.75 is the best option here.
+	if m.active <= m.deleted<<2 {
+		m.rehashInPlace()
 	}
+
+	si = roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio)))
 	src := m.items
-	m.Init(sz)
+	m.allocTables(si)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hash(it.key), it.key, it.value)
@@ -284,22 +306,6 @@ func (m *Map[K, V]) needRehashOrGrow() bool {
 	// free slot before insert, thus making sure that there is at least 1 free
 	// slot post insert.
 	return m.capacity-m.active-m.deleted < int(uint(m.capacity)>>4)
-}
-
-func (m *Map[K, V]) resize() (newSize int, resized bool) {
-	sz := m.capacity
-	// grow the table only if load factor >
-	// 5/8 (0.625) -> m.active > m.dead << 1
-	// 3/4 (0.75)  -> m.active > m.dead << 2
-	// 5/6 (0.833) -> m.active > m.dead << 3
-	// With 0.75 and growing the table by a factor of 1.5, the load factor is
-	// kept between 0.5 and 0.935
-	// Benchmarks showed that 0.75 is the best option here.
-	if m.active > m.deleted<<2 {
-		sz = int(math.Ceil(float64(sz) * growthRatio))
-		resized = true
-	}
-	return sz, resized
 }
 
 func (m *Map[K, V]) pos(hash uint) position {

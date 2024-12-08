@@ -2,11 +2,13 @@ package lru_test
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/db47h/cache/v2/lru"
+	"github.com/stretchr/testify/require"
 )
 
 var td = []struct {
@@ -77,30 +79,45 @@ func (m *cappedMap[K, V]) Set(key K, value V) {
 	}
 }
 
-func TestMap_Set_withEvict(t *testing.T) {
-	m := newMap[string, int](2, 0)
-	for _, d := range td {
-		m.Set(d.key, d.value)
+func TestMap_sanityCheck(t *testing.T) {
+	const (
+		capacity = 1 << 13
+		iters    = capacity << 8
+	)
+	xo := New64S()
+	maxLen := capacity * 80 / 100
+	m := newMap[int, int](maxLen, capacity)
+	// simulate a cache with 50% hit ratio
+	// vals keeps track of the last position at which each value has been accessed or inserted
+	vals := make(map[int]int)
+	for i := range iters {
+		k := xo.IntN(maxLen * 2)
+		vals[k] = i
+		if _, ok := m.Get(k); !ok {
+			m.Set(k, k)
+		}
 	}
 
-	// onEvict is called after entry update or insertion, so we expect only two items
-	// left.
-	expectedSize := 2
+	// reverse vals, building an ordered snapshot of the last maxLen Map ops.
+	type op struct {
+		idx int
+		key int
+	}
+	rv := make([]op, 0, len(vals))
+	for k, v := range vals {
+		rv = append(rv, op{idx: v, key: k})
+	}
+	slices.SortFunc(rv, func(a, b op) int { return a.idx - b.idx })
+	rv = rv[len(rv)-maxLen:]
 
-	if m.Len() != expectedSize {
-		t.Fatalf("Size(): expected %d; got %d", expectedSize, m.Len())
+	// remove and compare.
+	for i := range maxLen {
+		k, _ := m.LRU()
+		require.Equal(t, rv[i].key, k, "pos %d", i)
+		_, ok := m.Delete(k)
+		require.True(t, ok)
 	}
-
-	k, v := m.MRU()
-	it := &td[len(td)-1]
-	if k != it.key || v != it.value {
-		t.Fatalf("MRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
-	}
-	k, v = m.LRU()
-	it = &td[len(td)-expectedSize]
-	if k != it.key || v != it.value {
-		t.Fatalf("LRU: expected %s, %d; got %s, %d", it.key, it.value, k, v)
-	}
+	require.Equal(t, m.Len(), 0)
 }
 
 func TestMap_Get(t *testing.T) {
