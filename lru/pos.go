@@ -2,19 +2,19 @@ package lru
 
 import "math"
 
-type posInfo struct {
+type sizeInfo struct {
 	capacity int
 	n        int
 }
 
 type position struct {
-	*posInfo
+	*sizeInfo
 	offset int
 	dn     int
 }
 
-func pos(hash uint, p *posInfo) position {
-	return position{offset: reduceRange(hash, p.capacity) + 1, posInfo: p}
+func pos(hash uint, p *sizeInfo) position {
+	return position{offset: reduceRange(hash, p.capacity) + 1, sizeInfo: p}
 }
 
 // If m = n²
@@ -46,18 +46,18 @@ func (p position) next() position {
 func (p position) prev() position {
 	dn := p.dn - p.n*2
 	offset := subModulo(p.offset, dn+p.n+groupSize, p.capacity)
-	return position{offset: offset, dn: dn, posInfo: p.posInfo}
+	return position{offset: offset, dn: dn, sizeInfo: p.sizeInfo}
 }
 
 func (p position) index(i int) int {
 	return addModulo(p.offset, i, p.capacity)
 }
 
-func roundSizeUp(sz int) posInfo {
+func roundSizeUp(sz int) sizeInfo {
 	// find next size such that sz = ng²
 	ng := int(math.Ceil(math.Sqrt(float64(sz / groupSize))))
 	n := ng * groupSize
-	return posInfo{capacity: ng * n, n: n}
+	return sizeInfo{capacity: ng * n, n: n}
 }
 
 // addModulo adds x to pos and returns the new position in [1, sz]

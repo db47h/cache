@@ -34,12 +34,12 @@ import (
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hash    func(K) uint64
-	meta    []uint8
-	items   []item[K, V]
+	hash  func(K) uint64
+	meta  []uint8
+	items []item[K, V]
+	sizeInfo
 	active  int
 	deleted int
-	posInfo
 }
 
 type item[K comparable, V any] struct {
@@ -59,7 +59,7 @@ func (m *Map[K, V]) Init(capacity int) {
 	if capacity < minCapacity {
 		capacity = minCapacity
 	}
-	m.posInfo = roundSizeUp(capacity)
+	m.sizeInfo = roundSizeUp(capacity)
 	m.hash = maphash.NewHasher[K]().Hash
 	m.items = make([]item[K, V], m.capacity+1)
 	m.meta = make([]uint8, m.capacity+1+groupSize-1)
@@ -303,7 +303,7 @@ func (m *Map[K, V]) resize() (newSize int, resized bool) {
 }
 
 func (m *Map[K, V]) pos(hash uint) position {
-	return pos(hash, &m.posInfo)
+	return pos(hash, &m.sizeInfo)
 }
 
 func (m *Map[K, V]) setH2(index int, h2 uint8) {
