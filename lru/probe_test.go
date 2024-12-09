@@ -7,13 +7,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_position(t *testing.T) {
+func Test_probe(t *testing.T) {
 	for range 200 {
 		sz := rand.N(1<<10) + minCapacity
 		pi := roundSizeUp(sz)
 		sz = pi.capacity
 		ctrl := make([]uint8, sz+1)
-		p := pos(uint(rand.Uint64()), &pi)
+		p := newProbe(uint(rand.Uint64()), &pi)
 		p0 := p
 		for range sz / groupSize {
 			ctrl[p.offset] = 0xff

@@ -178,14 +178,15 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 		m.rehashOrGrow()
 		hash = m.hash(key)
 	}
-	p := m.pos(hash)
-again:
-	e := newBitset(&m.meta[p.offset]).matchNotSet()
-	if e == 0 {
-		p = p.next()
-		goto again
+	var i int
+	{ // manual inline of findFirstNotSet
+		for p := m.probe(hash); ; p = p.next() {
+			if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
+				i = p.index(e.next())
+				break
+			}
+		}
 	}
-	i := p.index(e.next())
 	m.active++
 	m.updateH2(i, h2(hash))
 	it := &m.items[i]
@@ -194,14 +195,14 @@ again:
 	m.toFront(it, i)
 }
 
-// find returns the hash for the given key and its position. If the key is not found,
-// the returned position is 0.
+// find returns the hash for the given key and its index in m.items. If the key is not found,
+// the returned index is 0.
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if m.capacity == 0 {
 		m.Init(0)
 	}
 	hash := m.hash(key)
-	p := m.pos(hash)
+	p := m.probe(hash)
 	h2 := h2(hash)
 	for {
 		s := newBitset(&m.meta[p.offset])
@@ -219,8 +220,8 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 	}
 }
 
-func (m *Map[K, V]) del(pos int) {
-	it := &m.items[pos]
+func (m *Map[K, V]) del(i int) {
+	it := &m.items[i]
 	m.unlink(it)
 	var zeroK K
 	var zeroV V
@@ -229,25 +230,25 @@ func (m *Map[K, V]) del(pos int) {
 
 	sz := m.capacity
 	m.active--
-	// if there is no probe window around pos that has ever been seen as a full group
-	// then we can mark pos as empty instead of deleted.
-	// e.g.:    0 1 1 1 1 P 1 1 0
-	// where 0 is an empty slot, 1 is set (or deleted) and P is pos.
+	// if there is no probe window around index i that has ever been seen as a full group
+	// then we can mark index i as empty instead of deleted.
+	// e.g.:    0 1 1 1 1 X 1 1 0
+	// where 0 is an empty slot, 1 is set (or deleted) and X is the slot at index i.
 	//
 	// Assuming that slot P is set, there is no probe window that has seen the
 	// neighborhood of P as a full group if:
-	//  - there must be an empty slot both before and after pos
-	//  - the sequence of consecitve non empty slots invluding pos must be smaller than groupSize
-	if after := newBitset(&m.meta[pos]).matchEmpty(); after != 0 {
-		if before := newBitset(&m.meta[subModulo(pos, groupSize, sz)]).matchEmpty(); before != 0 {
+	//  - there must be an empty slot both before and after i
+	//  - the sequence of consecitve non empty slots around i must be smaller than groupSize
+	if after := newBitset(&m.meta[i]).matchEmpty(); after != 0 {
+		if before := newBitset(&m.meta[subModulo(i, groupSize, sz)]).matchEmpty(); before != 0 {
 			if before.firstFromEnd()+after.first() < groupSize {
-				m.setH2(pos, empty)
+				m.setH2(i, empty)
 				return
 			}
 		}
 	}
 
-	m.setH2(pos, deleted)
+	m.setH2(i, deleted)
 	m.deleted++
 }
 
@@ -261,14 +262,12 @@ func (m *Map[K, V]) allocTables(si sizeInfo) {
 }
 
 func (m *Map[K, V]) rehashInPlace() {
-	// mark all deleted as empty
+	// mark all deleted as empty and all set slots as deleted.
 	for i := 1; i < len(m.meta)-groupSize; i += groupSize {
 		markDeletedAsEmptyAndSetAsDeleted(&m.meta[i])
 	}
-	// replicate first groupSize-1
-	for i, c := range m.meta[1:groupSize] {
-		m.meta[i+1+m.capacity] = c
-	}
+	// replicate meta[1:grogroupSize] to the end of the table
+	copy(m.meta[m.capacity+1:], m.meta[1:groupSize])
 
 	// loop through "deleted" items
 	for i := 1; i <= m.capacity; i++ {
@@ -279,9 +278,17 @@ func (m *Map[K, V]) rehashInPlace() {
 		it := &m.items[i]
 		hash := m.hash(it.key)
 		// initial probe position for element i
-		p := m.pos(hash)
-		// first possible insert position
-		target := m.findFirstNonFull(hash)
+		p := m.probe(hash)
+		// target insert index
+		var target int
+		{ // manual inline of findFirstNotSet
+			for p := m.probe(hash); ; p = p.next() {
+				if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
+					target = p.index(e.next())
+					break
+				}
+			}
+		}
 		// if i and dest fall within the same group for this hash,
 		// i is already the best position.
 		if p.distance(i)/groupSize == p.distance(target)/groupSize {
@@ -295,7 +302,7 @@ func (m *Map[K, V]) rehashInPlace() {
 			m.move(target, i)
 			continue
 		}
-		// dest is full, swap i and target, retry from current pos
+		// target is set, swap i and target, retry from current index
 		m.setH2(target, h2(hash))
 		m.swap(i, target)
 		i--
@@ -315,6 +322,8 @@ func (m *Map[K, V]) move(target, i int) {
 	s.value = zeroV
 }
 
+// swap swaps elements at indices i and j.
+// It does not get inlined but this is not a serious issue since it is very seldomly called.
 func (m *Map[K, V]) swap(i, j int) {
 	pi := &m.items[i]
 	pj := &m.items[j]
@@ -351,15 +360,12 @@ func (m *Map[K, V]) swap(i, j int) {
 	}
 }
 
-func (m *Map[K, V]) findFirstNonFull(hash uint64) int {
-	p := m.pos(hash)
-again:
-	e := newBitset(&m.meta[p.offset]).matchNotSet()
-	if e == 0 {
-		p = p.next()
-		goto again
+func (m *Map[K, V]) findFirstNotSet(hash uint64) int {
+	for p := m.probe(hash); ; p = p.next() {
+		if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
+			return p.index(e.next())
+		}
 	}
-	return p.index(e.next())
 }
 
 const (
@@ -399,8 +405,8 @@ func (m *Map[K, V]) needRehashOrGrow() bool {
 	return m.capacity-m.active-m.deleted < int(uint(m.capacity)>>4)
 }
 
-func (m *Map[K, V]) pos(hash uint64) position {
-	return pos(h1(hash), &m.sizeInfo)
+func (m *Map[K, V]) probe(hash uint64) probe {
+	return newProbe(h1(hash), &m.sizeInfo)
 }
 
 func (m *Map[K, V]) updateH2(index int, h2 uint8) {
