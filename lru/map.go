@@ -178,8 +178,7 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 		m.rehashOrGrow()
 		hash = m.hash(key)
 	}
-	h1, h2 := splitHash(hash)
-	p := m.pos(h1)
+	p := m.pos(hash)
 again:
 	e := newBitset(&m.meta[p.offset]).matchNotSet()
 	if e == 0 {
@@ -188,7 +187,7 @@ again:
 	}
 	i := p.index(e.next())
 	m.active++
-	m.setH2(i, h2)
+	m.updateH2(i, h2(hash))
 	it := &m.items[i]
 	it.key = key
 	it.value = value
@@ -202,8 +201,8 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 		m.Init(0)
 	}
 	hash := m.hash(key)
-	h1, h2 := splitHash(hash)
-	p := m.pos(h1)
+	p := m.pos(hash)
+	h2 := h2(hash)
 	for {
 		s := newBitset(&m.meta[p.offset])
 		for mb := s.matchByte(h2); mb != 0; {
@@ -242,13 +241,13 @@ func (m *Map[K, V]) del(pos int) {
 	if after := newBitset(&m.meta[pos]).matchEmpty(); after != 0 {
 		if before := newBitset(&m.meta[subModulo(pos, groupSize, sz)]).matchEmpty(); before != 0 {
 			if before.firstFromEnd()+after.first() < groupSize {
-				m.clearH2(pos, empty)
+				m.setH2(pos, empty)
 				return
 			}
 		}
 	}
 
-	m.clearH2(pos, deleted)
+	m.setH2(pos, deleted)
 	m.deleted++
 }
 
@@ -262,13 +261,105 @@ func (m *Map[K, V]) allocTables(si sizeInfo) {
 }
 
 func (m *Map[K, V]) rehashInPlace() {
-	src := m.items
-	m.allocTables(m.sizeInfo)
-	for i := src[0].prev; i != 0; {
-		it := &src[i]
-		m.insert(m.hash(it.key), it.key, it.value)
-		i = it.prev
+	// mark all deleted as empty
+	for i := 1; i < len(m.meta)-groupSize; i += groupSize {
+		markDeletedAsEmptyAndSetAsDeleted(&m.meta[i])
 	}
+	// replicate first groupSize-1
+	for i, c := range m.meta[1:groupSize] {
+		m.meta[i+1+m.capacity] = c
+	}
+
+	// loop through "deleted" items
+	for i := 1; i <= m.capacity; i++ {
+		c := &m.meta[i]
+		if *c != deleted {
+			continue
+		}
+		it := &m.items[i]
+		hash := m.hash(it.key)
+		// initial probe position for element i
+		p := m.pos(hash)
+		// first possible insert position
+		target := m.findFirstNonFull(hash)
+		// if i and dest fall within the same group for this hash,
+		// i is already the best position.
+		if p.distance(i)/groupSize == p.distance(target)/groupSize {
+			m.setH2(i, h2(hash))
+			continue
+		}
+		// if dest is empty, move i to dest
+		if m.meta[target] == empty {
+			m.setH2(i, empty)
+			m.setH2(target, h2(hash))
+			m.move(target, i)
+			continue
+		}
+		// dest is full, swap i and target, retry from current pos
+		m.setH2(target, h2(hash))
+		m.swap(i, target)
+		i--
+	}
+	m.deleted = 0
+}
+
+func (m *Map[K, V]) move(target, i int) {
+	d := &m.items[target]
+	s := &m.items[i]
+	*d = *s
+	m.items[d.prev].next = target
+	m.items[d.next].prev = target
+	var zeroK K
+	var zeroV V
+	s.key = zeroK
+	s.value = zeroV
+}
+
+func (m *Map[K, V]) swap(i, j int) {
+	pi := &m.items[i]
+	pj := &m.items[j]
+
+	pi.key, pj.key = pj.key, pi.key
+	pi.value, pj.value = pj.value, pi.value
+
+	if pi.next == j {
+		//       x -> i -> j -> y
+		// swap: x -> j -> i -> y
+		m.items[pi.prev].next = j
+		m.items[pj.next].prev = i
+		pj.prev = pi.prev
+		pi.next = pj.next
+		pi.next = i
+		pj.prev = j
+	} else if pj.next == i {
+		//       x -> j -> i -> y
+		// swap: x -> i -> j -> y
+		m.items[pj.prev].next = i
+		m.items[pi.next].prev = j
+		pi.prev = pj.prev
+		pj.next = pi.next
+		pi.next = j
+		pj.prev = i
+	} else {
+		// i, j disconnected, regular swap
+		pi.prev, pj.prev = pj.prev, pi.prev
+		pi.next, pj.next = pj.next, pi.next
+		m.items[pi.prev].next = i
+		m.items[pi.next].prev = i
+		m.items[pj.prev].next = j
+		m.items[pj.next].prev = j
+	}
+}
+
+func (m *Map[K, V]) findFirstNonFull(hash uint64) int {
+	p := m.pos(hash)
+again:
+	e := newBitset(&m.meta[p.offset]).matchNotSet()
+	if e == 0 {
+		p = p.next()
+		goto again
+	}
+	return p.index(e.next())
 }
 
 const (
@@ -308,11 +399,11 @@ func (m *Map[K, V]) needRehashOrGrow() bool {
 	return m.capacity-m.active-m.deleted < int(uint(m.capacity)>>4)
 }
 
-func (m *Map[K, V]) pos(hash uint) position {
-	return pos(hash, &m.sizeInfo)
+func (m *Map[K, V]) pos(hash uint64) position {
+	return pos(h1(hash), &m.sizeInfo)
 }
 
-func (m *Map[K, V]) setH2(index int, h2 uint8) {
+func (m *Map[K, V]) updateH2(index int, h2 uint8) {
 	c := &m.meta[index]
 	m.deleted -= int(*c >> 1)
 	*c = h2
@@ -321,7 +412,7 @@ func (m *Map[K, V]) setH2(index int, h2 uint8) {
 	}
 }
 
-func (m *Map[K, V]) clearH2(index int, h2 uint8) {
+func (m *Map[K, V]) setH2(index int, h2 uint8) {
 	m.meta[index] = h2
 	if index < groupSize {
 		m.meta[index+m.capacity] = h2

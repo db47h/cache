@@ -53,8 +53,12 @@ func (p position) index(i int) int {
 	return addModulo(p.offset, i, p.capacity)
 }
 
+func (p position) distance(i int) int {
+	return subModulo(i, p.offset, p.capacity)
+}
+
 func roundSizeUp(sz int) sizeInfo {
-	// find next size such that sz = ng²
+	// find next size such that sz = ng² * groupSize
 	ng := int(math.Ceil(math.Sqrt(float64(sz / groupSize))))
 	n := ng * groupSize
 	return sizeInfo{capacity: ng * n, n: n}

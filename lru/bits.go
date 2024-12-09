@@ -18,14 +18,18 @@ func reduceRange(x uint, n int) int {
 
 // splitHash returns uint(hash) and hash&7F|setMask. Since reduceRange (the only consumer for H1) does
 // not use a modulo operation, we can safely use the full hash for H1.
-func splitHash(hash uint64) (h1 uint, h2 uint8) {
+// deprecated
+func splitHas(hash uint64) (h1 uint, h2 uint8) {
 	// uint(hash), uint8(hash)&0x7F | setMask simplifies to:
 	return uint(hash), uint8(hash) | setMask
 }
 
+func h1(hash uint64) uint  { return uint(hash) }
+func h2(hash uint64) uint8 { return uint8(hash) | setMask }
+
 const (
 	empty     = 0
-	deleted   = 2 // see [matchEmpty]
+	deleted   = 2 // see [matchEmpty]. For in-place rehash, this must be an exponent of 2 > 0.
 	setMask   = 0x80
 	groupSize = 8
 
@@ -58,6 +62,20 @@ func (s bitset) matchZero() match { return (match(s) - loBits) & ^match(s) & hiB
 
 // matchByte returns a non zero bitset if and only if b contains any byte matching b.
 func (s bitset) matchByte(b uint8) match { return (s ^ (loBits * bitset(b))).matchZero() }
+
+func markDeletedAsEmptyAndSetAsDeleted(c *uint8) {
+	s := *(*uint64)(unsafe.Pointer(c))
+	// clear deleted
+	s ^= deleted
+	// mark set slots as deleted.
+	*(*uint64)(unsafe.Pointer(c)) = s & hiBits / (setMask / deleted)
+}
+
+// matchDeleted matches only deleted ctrl bytes but s must contain only deleted or empty entries.
+func (s bitset) matchDeleted() match {
+	// do not even do s * (setMask/deleted) since match.next will work as intended with any non 0 byte.
+	return match(s)
+}
 
 type match uint64
 

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_reduceRange(t *testing.T) {
@@ -20,7 +20,7 @@ func Test_reduceRange(t *testing.T) {
 			const mean = 2000
 			samples := n * mean
 			for range samples {
-				h1, _ := splitHash(rand.Uint64())
+				h1 := h1(rand.Uint64())
 				b := reduceRange(h1, n)
 				buckets[b]++
 			}
@@ -32,7 +32,7 @@ func Test_reduceRange(t *testing.T) {
 			// allow σ < mean*10%. This is very lenient but should not give a false positive on a statistical fluke.
 			// For bug hunting purposes, we're just looking for large discrepencies between buckets.
 			// For example this will fail if we even shift H1 by 1 bit to the right.
-			assert.Less(t, sd, mean*.1)
+			require.Less(t, sd, mean*.1)
 		})
 	}
 }
@@ -43,9 +43,9 @@ func Test_splitHash(t *testing.T) {
 		eh1  = 0x1122334455667ff8
 		eh2  = 0xf8
 	)
-	h1, h2 := splitHash(hash & math.MaxUint)
-	assert.Equal(t, uint(eh1&math.MaxUint), h1)
-	assert.Equal(t, uint8(eh2), h2)
+	h1, h2 := h1(hash&math.MaxUint), h2(hash&math.MaxUint)
+	require.Equal(t, uint(eh1&math.MaxUint), h1)
+	require.Equal(t, uint8(eh2), h2)
 }
 
 func Test_bitset(t *testing.T) {
@@ -59,9 +59,9 @@ func Test_bitset(t *testing.T) {
 	cs[groupSize*2-1] = 0xFF
 	for i := range groupSize {
 		expected := bitset(binary.LittleEndian.Uint64(cs[i:]))
-		assert.Equal(t, expected, newBitset(&cs[i]))
+		require.Equal(t, expected, newBitset(&cs[i]))
 		// make sure we don't read past cs[size+GroupSize-2]
-		assert.True(t, bitset(expected).matchByte(0xFF) == 0)
+		require.True(t, bitset(expected).matchByte(0xFF) == 0)
 	}
 }
 
@@ -81,18 +81,14 @@ func Test_bitsset_matchNotSet(t *testing.T) {
 			f1, f2 = f2, f1
 		}
 		m := newBitset(&cs[pos]).matchNotSet()
-		if !assert.True(t, m != 0) {
-			t.Fatal()
-		}
+		require.True(t, m != 0)
 		p := m.next()
-		if !assert.Equal(t, f1, pos+p) || !assert.True(t, cs[f1]&setMask == 0) {
-			t.Fatalf("F1 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
-		}
+		require.Equal(t, f1, pos+p, "F1")
+		require.True(t, cs[f1]&setMask == 0, "F1")
 		if f1 != f2 {
 			p = m.next()
-			if !assert.Equal(t, f2, pos+p) || !assert.True(t, cs[f2]&setMask == 0) {
-				t.Fatalf("F2 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
-			}
+			require.Equal(t, f2, pos+p, "F2")
+			require.True(t, cs[f2]&setMask == 0, "F2")
 		}
 	}
 }
@@ -115,20 +111,23 @@ func Test_bitset_matchByte(t *testing.T) {
 		setCtrl(cs, f2, v)
 		s := newBitset(&cs[pos])
 		m := s.matchByte(v)
-		if !assert.True(t, m != 0) {
-			t.Fatal()
-		}
+		require.True(t, m != 0)
 		p := m.next()
-		if !assert.Equal(t, f1, pos+p) || !assert.Equal(t, v, cs[pos+p]) {
-			t.Fatalf("F1 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
-		}
+		require.Equal(t, f1, pos+p, "F1")
+		require.Equal(t, v, cs[pos+p], "F1")
 		if f1 != f2 {
 			p := m.next()
-			if !assert.Equal(t, f2, pos+p) || !assert.Equal(t, v, cs[pos+p]) {
-				t.Fatalf("F2 cs=%v, Match=%016x, pos=%d, p=%d", cs, m, pos, p)
-			}
+			require.Equal(t, f2, pos+p, "F2")
+			require.Equal(t, v, cs[pos+p], "F2")
 		}
 	}
+}
+
+func Test_bitset_markDeletedAsEmptyAndSetAsDeleted(t *testing.T) {
+	ctrl := []uint8{setMask | deleted, empty, deleted, deleted, setMask | empty, deleted, empty, setMask}
+	expect := []uint8{deleted, empty, empty, empty, deleted, empty, empty, deleted}
+	markDeletedAsEmptyAndSetAsDeleted(&ctrl[0])
+	require.Equal(t, expect, ctrl)
 }
 
 func makeCtrl(sz int) []uint8 {
