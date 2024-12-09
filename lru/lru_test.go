@@ -220,7 +220,7 @@ func TestMap_Delete(t *testing.T) {
 const capacity = 1 << 15
 
 func Benchmark_Map_int_int(b *testing.B) {
-	lfs := []float64{.9, .8, .7}
+	lfs := []float64{.9, .8, .75}
 	hrs := []int{90, 75, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {

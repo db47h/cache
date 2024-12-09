@@ -376,12 +376,13 @@ func (m *Map[K, V]) rehashOrGrow() {
 	// 5/8 (0.625) -> m.active > m.dead << 1
 	// 3/4 (0.75)  -> m.active > m.dead << 2
 	// 5/6 (0.833) -> m.active > m.dead << 3
-	// 3/4 is (15/16) / (1 + 1/4). Changing the max load factor would affect these values.
+	// 3/4 is (15/16) / (1 + 1/(1<<2)). Changing the max load factor would affect these values.
 	// With 0.75 and growing the table by a factor of 1.5, the load factor is
 	// kept between 0.5 and 0.935
 	// Benchmarks showed that 0.75 is the best option here.
 	if m.active <= m.deleted<<2 {
 		m.rehashInPlace()
+		return
 	}
 
 	si = roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio)))
