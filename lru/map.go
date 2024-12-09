@@ -105,7 +105,7 @@ func (m *Map[K, V]) Delete(key K) (V, bool) {
 // All returns an iterator for all keys in the Map, lru first.
 func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 	return func(yield func(K) bool) {
-		for i := m.items[0].prev; i != 0; {
+		for i := m.lru(); i != 0; {
 			it := &m.items[i]
 			prev := it.prev
 			if !yield(it.key) {
@@ -119,7 +119,7 @@ func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 // All returns an iterator for all values in the Map, lru first.
 func (m *Map[K, V]) Values() func(yield func(V) bool) {
 	return func(yield func(V) bool) {
-		for i := m.items[0].prev; i != 0; {
+		for i := m.lru(); i != 0; {
 			it := &m.items[i]
 			prev := it.prev
 			if !yield(it.value) {
@@ -133,7 +133,7 @@ func (m *Map[K, V]) Values() func(yield func(V) bool) {
 // All returns an iterator for all key value pairs in the Map, lru first.
 func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 	return func(yield func(K, V) bool) {
-		for i := m.items[0].prev; i != 0; {
+		for i := m.lru(); i != 0; {
 			it := &m.items[i]
 			prev := it.prev
 			if !yield(it.key, it.value) {
@@ -145,7 +145,7 @@ func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 }
 
 func (m *Map[K, V]) DeleteLRU() (key K, value V) {
-	i := m.items[0].prev
+	i := m.lru()
 	if i == 0 {
 		return
 	}
@@ -157,8 +157,8 @@ func (m *Map[K, V]) DeleteLRU() (key K, value V) {
 }
 
 func (m *Map[K, V]) LRU() (K, V) {
-	i := m.items[0].prev
-	// l.items[0].key and l.items[0].value are zero values for K and V
+	i := m.lru()
+	// do not check if i == 0 since l.items[0].key and l.items[0].value are zero values for K and V
 	return m.items[i].key, m.items[i].value
 }
 
@@ -269,12 +269,9 @@ func (m *Map[K, V]) rehashInPlace() {
 	// replicate meta[1:grogroupSize] to the end of the table
 	copy(m.meta[m.capacity+1:], m.meta[1:groupSize])
 
-	// loop through "deleted" items
-	for i := 1; i <= m.capacity; i++ {
-		c := &m.meta[i]
-		if *c != deleted {
-			continue
-		}
+	// loop through items marked deleted
+	// Use the linked list of items instead of examining every slot
+	for i := m.lru(); i != 0; i = m.items[i].prev {
 		it := &m.items[i]
 		hash := m.hash(it.key)
 		// initial probe position for element i
@@ -304,8 +301,9 @@ func (m *Map[K, V]) rehashInPlace() {
 		}
 		// target is set, swap i and target, retry from current index
 		m.setH2(target, h2(hash))
+		// Swap does not get inlined but this is not a serious issue since it is very seldomly called.
 		m.swap(i, target)
-		i--
+		i = target
 	}
 	m.deleted = 0
 }
@@ -323,7 +321,6 @@ func (m *Map[K, V]) move(target, i int) {
 }
 
 // swap swaps elements at indices i and j.
-// It does not get inlined but this is not a serious issue since it is very seldomly called.
 func (m *Map[K, V]) swap(i, j int) {
 	pi := &m.items[i]
 	pj := &m.items[j]
@@ -439,4 +436,8 @@ func (m *Map[K, V]) toFront(it *item[K, V], i int) {
 	it.next = next
 	head.next = i
 	m.items[next].prev = i
+}
+
+func (m *Map[K, V]) lru() int {
+	return m.items[0].prev
 }
