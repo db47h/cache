@@ -34,15 +34,15 @@ import (
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hash  func(K) uint64
-	meta  []uint8
-	items []item[K, V]
+	hash func(K) uint64
+	meta []uint8
+	elms []element[K, V]
 	sizeInfo
 	active  int
 	deleted int
 }
 
-type item[K comparable, V any] struct {
+type element[K comparable, V any] struct {
 	key   K
 	value V
 	prev  int
@@ -68,7 +68,7 @@ func (m *Map[K, V]) Init(capacity int) {
 func (m *Map[K, V]) Set(key K, value V) (prev V, replaced bool) {
 	hash, i := m.find(key)
 	if i != 0 {
-		it := &m.items[i]
+		it := &m.elms[i]
 		m.unlink(it)
 		m.toFront(it, i)
 		prev, it.value = it.value, value
@@ -81,7 +81,7 @@ func (m *Map[K, V]) Set(key K, value V) (prev V, replaced bool) {
 
 func (m *Map[K, V]) Get(key K) (V, bool) {
 	if _, i := m.find(key); i != 0 {
-		it := &m.items[i]
+		it := &m.elms[i]
 		m.unlink(it)
 		m.toFront(it, i)
 		return it.value, true
@@ -94,7 +94,7 @@ func (m *Map[K, V]) Get(key K) (V, bool) {
 // found, otherwise it returns the zero value for V and false.
 func (m *Map[K, V]) Delete(key K) (V, bool) {
 	if _, i := m.find(key); i != 0 {
-		v := m.items[i].value
+		v := m.elms[i].value
 		m.del(i)
 		return v, true
 	}
@@ -106,7 +106,7 @@ func (m *Map[K, V]) Delete(key K) (V, bool) {
 func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 	return func(yield func(K) bool) {
 		for i := m.lru(); i != 0; {
-			it := &m.items[i]
+			it := &m.elms[i]
 			prev := it.prev
 			if !yield(it.key) {
 				break
@@ -120,7 +120,7 @@ func (m *Map[K, V]) Keys() func(yield func(K) bool) {
 func (m *Map[K, V]) Values() func(yield func(V) bool) {
 	return func(yield func(V) bool) {
 		for i := m.lru(); i != 0; {
-			it := &m.items[i]
+			it := &m.elms[i]
 			prev := it.prev
 			if !yield(it.value) {
 				break
@@ -134,7 +134,7 @@ func (m *Map[K, V]) Values() func(yield func(V) bool) {
 func (m *Map[K, V]) All() func(yield func(K, V) bool) {
 	return func(yield func(K, V) bool) {
 		for i := m.lru(); i != 0; {
-			it := &m.items[i]
+			it := &m.elms[i]
 			prev := it.prev
 			if !yield(it.key, it.value) {
 				break
@@ -149,7 +149,7 @@ func (m *Map[K, V]) DeleteLRU() (key K, value V) {
 	if i == 0 {
 		return
 	}
-	it := &m.items[i]
+	it := &m.elms[i]
 	key = it.key
 	value = it.value
 	m.del(i)
@@ -158,13 +158,13 @@ func (m *Map[K, V]) DeleteLRU() (key K, value V) {
 
 func (m *Map[K, V]) LRU() (K, V) {
 	i := m.lru()
-	// do not check if i == 0 since l.items[0].key and l.items[0].value are zero values for K and V
-	return m.items[i].key, m.items[i].value
+	// do not check if i == 0 since l.elms[0].key and l.elms[0].value are zero values for K and V
+	return m.elms[i].key, m.elms[i].value
 }
 
 func (m *Map[K, V]) MRU() (K, V) {
-	i := m.items[0].next
-	return m.items[i].key, m.items[i].value
+	i := m.elms[0].next
+	return m.elms[i].key, m.elms[i].value
 }
 
 func (m *Map[K, V]) Load() float64 { return float64(m.active) / float64(m.capacity) }
@@ -189,13 +189,13 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	}
 	m.active++
 	m.updateH2(i, h2(hash))
-	it := &m.items[i]
+	it := &m.elms[i]
 	it.key = key
 	it.value = value
 	m.toFront(it, i)
 }
 
-// find returns the hash for the given key and its index in m.items. If the key is not found,
+// find returns the hash for the given key and its index in m.elms. If the key is not found,
 // the returned index is 0.
 func (m *Map[K, V]) find(key K) (uint64, int) {
 	if m.capacity == 0 {
@@ -209,7 +209,7 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 		for mb := s.matchByte(h2); mb != 0; {
 			i := p.index(mb.next())
 			// mathcByte can yield false positives in rare edge cases, but this is harmless here.
-			if m.items[i].key == key {
+			if m.elms[i].key == key {
 				return hash, i
 			}
 		}
@@ -221,7 +221,7 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 }
 
 func (m *Map[K, V]) del(i int) {
-	it := &m.items[i]
+	it := &m.elms[i]
 	m.unlink(it)
 	var zeroK K
 	var zeroV V
@@ -255,7 +255,7 @@ func (m *Map[K, V]) del(i int) {
 func (m *Map[K, V]) allocTables(si sizeInfo) {
 	m.sizeInfo = si
 	m.hash = maphash.NewHasher[K]().Hash
-	m.items = make([]item[K, V], m.capacity+1)
+	m.elms = make([]element[K, V], m.capacity+1)
 	m.meta = make([]uint8, m.capacity+1+groupSize-1)
 	m.active = 0
 	m.deleted = 0
@@ -269,10 +269,10 @@ func (m *Map[K, V]) rehashInPlace() {
 	// replicate meta[1:grogroupSize] to the end of the table
 	copy(m.meta[m.capacity+1:], m.meta[1:groupSize])
 
-	// loop through items marked deleted
-	// Use the linked list of items instead of examining every slot
-	for i := m.lru(); i != 0; i = m.items[i].prev {
-		it := &m.items[i]
+	// loop through elements marked deleted
+	// Use the lru list to loop only through set elements instead of examining every slot.
+	for i := m.lru(); i != 0; i = m.elms[i].prev {
+		it := &m.elms[i]
 		hash := m.hash(it.key)
 		// initial probe position for element i
 		p := m.probe(hash)
@@ -309,11 +309,11 @@ func (m *Map[K, V]) rehashInPlace() {
 }
 
 func (m *Map[K, V]) move(target, i int) {
-	d := &m.items[target]
-	s := &m.items[i]
+	d := &m.elms[target]
+	s := &m.elms[i]
 	*d = *s
-	m.items[d.prev].next = target
-	m.items[d.next].prev = target
+	m.elms[d.prev].next = target
+	m.elms[d.next].prev = target
 	var zeroK K
 	var zeroV V
 	s.key = zeroK
@@ -322,8 +322,8 @@ func (m *Map[K, V]) move(target, i int) {
 
 // swap swaps elements at indices i and j.
 func (m *Map[K, V]) swap(i, j int) {
-	pi := &m.items[i]
-	pj := &m.items[j]
+	pi := &m.elms[i]
+	pj := &m.elms[j]
 
 	pi.key, pj.key = pj.key, pi.key
 	pi.value, pj.value = pj.value, pi.value
@@ -331,8 +331,8 @@ func (m *Map[K, V]) swap(i, j int) {
 	if pi.next == j {
 		//       x -> i -> j -> y
 		// swap: x -> j -> i -> y
-		m.items[pi.prev].next = j
-		m.items[pj.next].prev = i
+		m.elms[pi.prev].next = j
+		m.elms[pj.next].prev = i
 		pj.prev = pi.prev
 		pi.next = pj.next
 		pi.next = i
@@ -340,8 +340,8 @@ func (m *Map[K, V]) swap(i, j int) {
 	} else if pj.next == i {
 		//       x -> j -> i -> y
 		// swap: x -> i -> j -> y
-		m.items[pj.prev].next = i
-		m.items[pi.next].prev = j
+		m.elms[pj.prev].next = i
+		m.elms[pi.next].prev = j
 		pi.prev = pj.prev
 		pj.next = pi.next
 		pi.next = j
@@ -350,10 +350,10 @@ func (m *Map[K, V]) swap(i, j int) {
 		// i, j disconnected, regular swap
 		pi.prev, pj.prev = pj.prev, pi.prev
 		pi.next, pj.next = pj.next, pi.next
-		m.items[pi.prev].next = i
-		m.items[pi.next].prev = i
-		m.items[pj.prev].next = j
-		m.items[pj.next].prev = j
+		m.elms[pi.prev].next = i
+		m.elms[pi.next].prev = i
+		m.elms[pj.prev].next = j
+		m.elms[pj.next].prev = j
 	}
 }
 
@@ -385,7 +385,7 @@ func (m *Map[K, V]) rehashOrGrow() {
 	}
 
 	si = roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio)))
-	src := m.items
+	src := m.elms
 	m.allocTables(si)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
@@ -422,22 +422,22 @@ func (m *Map[K, V]) setH2(index int, h2 uint8) {
 	}
 }
 
-func (m *Map[K, V]) unlink(it *item[K, V]) {
+func (m *Map[K, V]) unlink(it *element[K, V]) {
 	next := it.next
 	prev := it.prev
-	m.items[prev].next = next
-	m.items[next].prev = prev
+	m.elms[prev].next = next
+	m.elms[next].prev = prev
 }
 
-func (m *Map[K, V]) toFront(it *item[K, V], i int) {
-	head := &m.items[0]
+func (m *Map[K, V]) toFront(it *element[K, V], i int) {
+	head := &m.elms[0]
 	next := head.next
 	it.prev = 0
 	it.next = next
 	head.next = i
-	m.items[next].prev = i
+	m.elms[next].prev = i
 }
 
 func (m *Map[K, V]) lru() int {
-	return m.items[0].prev
+	return m.elms[0].prev
 }

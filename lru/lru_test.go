@@ -40,7 +40,7 @@ func TestMap_Set(t *testing.T) {
 		t.Fatalf("size mismatch: want %d, got %d", len(td), m.Len())
 	}
 
-	// check item ordering
+	// check element ordering
 	k, v := m.MRU()
 	it := &td[len(td)-1]
 	if k != it.key || v != it.value {
@@ -168,7 +168,7 @@ func TestMap_All(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("Map.All returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.All returned %d elements, expected %d", i, len(td))
 	}
 }
 
@@ -183,7 +183,7 @@ func TestMap_Keys(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("Map.Keys returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.Keys returned %d elements, expected %d", i, len(td))
 	}
 }
 
@@ -198,7 +198,7 @@ func TestMap_Values(t *testing.T) {
 		i++
 	}
 	if i != len(td) {
-		t.Fatalf("Map.Keys returned %d items, expected %d", i, len(td))
+		t.Fatalf("Map.Keys returned %d elements, expected %d", i, len(td))
 	}
 }
 
@@ -234,11 +234,11 @@ func Benchmark_Map_int_int(b *testing.B) {
 // typical workload for a cache were we fetch entries and create one if not found
 // with the given hit ratio (expressed as hit%)
 func bench_Map_int_int(lf float64, hitp int, b *testing.B) {
-	maxItemCount := int(capacity * lf)
+	maxElements := int(capacity * lf)
 	xo := New64S()
-	m := newMap[int, int](maxItemCount, capacity)
-	sampleSize := maxItemCount * 100 / hitp
-	for i := 0; i < maxItemCount; i++ {
+	m := newMap[int, int](maxElements, capacity)
+	sampleSize := maxElements * 100 / hitp
+	for i := 0; i < maxElements; i++ {
 		j := xo.IntN(sampleSize)
 		m.Set(j, j)
 	}
@@ -264,12 +264,12 @@ func Benchmark_Map_string_string(b *testing.B) {
 }
 
 func bench_Map_string_string(lf float64, hitp int, b *testing.B) {
-	maxItemCount := int(capacity * lf)
+	maxElements := int(capacity * lf)
 	xo := New64S()
-	m := newMap[string, string](maxItemCount, capacity)
-	sampleSize := maxItemCount * 100 / hitp
+	m := newMap[string, string](maxElements, capacity)
+	sampleSize := maxElements * 100 / hitp
 	s := stringArray(xo, sampleSize)
-	for i := 0; i < maxItemCount; i++ {
+	for i := 0; i < maxElements; i++ {
 		j := xo.IntN(sampleSize)
 		m.Set(s[j], s[j])
 	}
