@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/db47h/cache/v2/hash"
 	"github.com/db47h/cache/v2/lru"
 	"github.com/stretchr/testify/require"
 )
@@ -59,11 +60,11 @@ type cappedMap[K comparable, V any] struct {
 	max      int
 }
 
-func newMap[K comparable, V any](max, capacity int) *cappedMap[K, V] {
+func newMap[K comparable, V any](max int, opts ...lru.Option) *cappedMap[K, V] {
 	var m cappedMap[K, V]
 	m.capacity = capacity
 	m.max = max
-	m.Init(capacity)
+	m.Init(opts...)
 	return &m
 }
 
@@ -86,7 +87,7 @@ func TestMap_sanityCheck(t *testing.T) {
 	)
 	xo := New64S()
 	maxLen := capacity * 80 / 100
-	m := newMap[int, int](maxLen, capacity)
+	m := newMap[int, int](maxLen, lru.WithCapacity(capacity))
 	// simulate a cache with 50% hit ratio
 	// vals keeps track of the last position at which each value has been accessed or inserted
 	vals := make(map[int]int)
@@ -220,7 +221,7 @@ func TestMap_Delete(t *testing.T) {
 const capacity = 1 << 15
 
 func Benchmark_Map_int_int(b *testing.B) {
-	lfs := []float64{.9, .8, .75}
+	lfs := []float64{.9, .8, .7}
 	hrs := []int{90, 75, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {
@@ -236,7 +237,7 @@ func Benchmark_Map_int_int(b *testing.B) {
 func bench_Map_int_int(lf float64, hitp int, b *testing.B) {
 	maxElements := int(capacity * lf)
 	xo := New64S()
-	m := newMap[int, int](maxElements, capacity)
+	m := newMap[int, int](maxElements, lru.WithCapacity(capacity), lru.WithHasher(hash.Number[int]()))
 	sampleSize := maxElements * 100 / hitp
 	for i := 0; i < maxElements; i++ {
 		j := xo.IntN(sampleSize)
@@ -266,7 +267,7 @@ func Benchmark_Map_string_string(b *testing.B) {
 func bench_Map_string_string(lf float64, hitp int, b *testing.B) {
 	maxElements := int(capacity * lf)
 	xo := New64S()
-	m := newMap[string, string](maxElements, capacity)
+	m := newMap[string, string](maxElements, lru.WithCapacity(capacity), lru.WithHasher(hash.String()))
 	sampleSize := maxElements * 100 / hitp
 	s := stringArray(xo, sampleSize)
 	for i := 0; i < maxElements; i++ {

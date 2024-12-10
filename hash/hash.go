@@ -26,7 +26,8 @@ func Bytes() func([]byte) uint64 {
 // Integer hashing algorithm inspired by https://github.com/Nicoshev/rapidhash
 
 type IntType interface {
-	~int | ~int32 | ~int64 | ~uint | ~uint32 | ~uint64
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
 }
 
 func Number[T IntType]() func(v T) uint64 {
@@ -36,7 +37,7 @@ func Number[T IntType]() func(v T) uint64 {
 	return func(v T) uint64 {
 		var a, b uint64
 		b = uint64(v)
-		if unsafe.Sizeof(v) == 4 {
+		if unsafe.Sizeof(v) <= 4 {
 			b |= b << 32
 			a = b
 		} else {
@@ -50,4 +51,14 @@ func Number[T IntType]() func(v T) uint64 {
 func mix(a, b uint64) uint64 {
 	hi, lo := bits.Mul64(uint64(a), uint64(b))
 	return hi ^ lo
+}
+
+func Generic[K comparable]() func(K) uint64 {
+	var h maphash.Hash
+	h.SetSeed(maphash.MakeSeed())
+	return func(key K) uint64 {
+		h.Reset()
+		h.Write(unsafe.Slice((*byte)(unsafe.Pointer(&key)), unsafe.Sizeof(key)))
+		return h.Sum64()
+	}
 }

@@ -26,11 +26,7 @@
 // http://people.csail.mit.edu/shanir/publications/disc2008_submission_98.pdf
 package lru
 
-import (
-	"math"
-
-	"github.com/dolthub/maphash"
-)
+import "math"
 
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
@@ -49,17 +45,16 @@ type element[K comparable, V any] struct {
 	next  int
 }
 
-func NewMap[K comparable, V any](capacity int) *Map[K, V] {
+func NewMap[K comparable, V any](opts ...Option) *Map[K, V] {
 	var m Map[K, V]
-	m.Init(capacity)
+	m.Init(opts...)
 	return &m
 }
 
-func (m *Map[K, V]) Init(capacity int) {
-	if capacity < minCapacity {
-		capacity = minCapacity
-	}
-	m.allocTables(roundSizeUp(capacity))
+func (m *Map[K, V]) Init(opts ...Option) {
+	o := getOpts[K](opts)
+	m.hash = o.hasher.(func(K) uint64)
+	m.resize(roundSizeUp(o.capacity))
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -158,16 +153,34 @@ func (m *Map[K, V]) DeleteLRU() (key K, value V) {
 
 func (m *Map[K, V]) LRU() (K, V) {
 	i := m.lru()
-	// do not check if i == 0 since l.elms[0].key and l.elms[0].value are zero values for K and V
+	if i == 0 {
+		var (
+			zeroK K
+			zeroV V
+		)
+		return zeroK, zeroV
+	}
 	return m.elms[i].key, m.elms[i].value
 }
 
 func (m *Map[K, V]) MRU() (K, V) {
 	i := m.elms[0].next
+	if i == 0 {
+		var (
+			zeroK K
+			zeroV V
+		)
+		return zeroK, zeroV
+	}
 	return m.elms[i].key, m.elms[i].value
 }
 
-func (m *Map[K, V]) Load() float64 { return float64(m.active) / float64(m.capacity) }
+func (m *Map[K, V]) Load() float64 {
+	if m.capacity == 0 {
+		return 0
+	}
+	return float64(m.active) / float64(m.capacity)
+}
 
 func (m *Map[K, V]) Capacity() int { return m.capacity }
 
@@ -198,8 +211,10 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 // find returns the hash for the given key and its index in m.elms. If the key is not found,
 // the returned index is 0.
 func (m *Map[K, V]) find(key K) (uint64, int) {
+	// find is always called before any get/set/delete, this is a good spot to
+	// initialize if needed.
 	if m.capacity == 0 {
-		m.Init(0)
+		m.Init()
 	}
 	hash := m.hash(key)
 	p := m.probe(hash)
@@ -252,9 +267,8 @@ func (m *Map[K, V]) del(i int) {
 	m.deleted++
 }
 
-func (m *Map[K, V]) allocTables(si sizeInfo) {
+func (m *Map[K, V]) resize(si sizeInfo) {
 	m.sizeInfo = si
-	m.hash = maphash.NewHasher[K]().Hash
 	m.elms = make([]element[K, V], m.capacity+1)
 	m.meta = make([]uint8, m.capacity+1+groupSize-1)
 	m.active = 0
@@ -387,7 +401,7 @@ func (m *Map[K, V]) rehashOrGrow() {
 
 	si = roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio)))
 	src := m.elms
-	m.allocTables(si)
+	m.resize(si)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hash(it.key), it.key, it.value)
@@ -440,5 +454,8 @@ func (m *Map[K, V]) toFront(it *element[K, V], i int) {
 }
 
 func (m *Map[K, V]) lru() int {
+	if len(m.elms) < 1 {
+		return 0
+	}
 	return m.elms[0].prev
 }
