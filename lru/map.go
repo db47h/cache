@@ -398,10 +398,8 @@ func (m *Map[K, V]) rehashOrGrow() {
 		m.rehashInPlace()
 		return
 	}
-
-	si = roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio)))
 	src := m.elms
-	m.resize(si)
+	m.resize(roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio))))
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hash(it.key), it.key, it.value)
