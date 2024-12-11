@@ -100,8 +100,8 @@ type element[K comparable, V any] struct {
 }
 
 func Benchmark_builtinMap_int_int(b *testing.B) {
-	lfs := []float64{.9, .8, .7}
-	hrs := []int{90, 75, 50}
+	lfs := []float64{.9, .7}
+	hrs := []int{90, 70, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {
 			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
@@ -132,8 +132,8 @@ func bench_builtinMap_int_int(lf float64, hitp int, b *testing.B) {
 }
 
 func Benchmark_builtinMap_string_string(b *testing.B) {
-	lfs := []float64{.9, .8, .7}
-	hrs := []int{90, 75, 50}
+	lfs := []float64{.9, .7}
+	hrs := []int{90, 70, 50}
 	for _, h := range hrs {
 		for _, lf := range lfs {
 			b.Run(fmt.Sprintf("%s_%d_%d", b.Name(), int(lf*100), h), func(b *testing.B) {
