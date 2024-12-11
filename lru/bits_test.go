@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_reduceRange(t *testing.T) {
+func Test_h1_h2(t *testing.T) {
 	// the goal of reduce range is to get a uniform distribution from X to N,
 	// so we'll test that instead of testing actual values.
-	ranges := []int{16, 4096, 15000}
+	ranges := []int{16, 1 << 12, 1 << 14}
 	for _, n := range ranges {
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
 			buckets := make([]int, n)
@@ -21,7 +21,7 @@ func Test_reduceRange(t *testing.T) {
 			samples := n * mean
 			for range samples {
 				h1 := h1(rand.Uint64())
-				b := reduceRange(h1, n)
+				b := h1 & uint(len(buckets)-1)
 				buckets[b]++
 			}
 			sum2 := .0
@@ -40,7 +40,7 @@ func Test_reduceRange(t *testing.T) {
 func Test_splitHash(t *testing.T) {
 	const (
 		hash = 0x1122334455667ff8
-		eh1  = 0x1122334455667ff8
+		eh1  = 0x1122334455667ff8 >> 7
 		eh2  = 0xf8
 	)
 	h1, h2 := h1(hash&math.MaxUint), h2(hash&math.MaxUint)

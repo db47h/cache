@@ -6,25 +6,7 @@ import (
 	"unsafe"
 )
 
-// reduceRange maps x to the range [0, n)
-// Instead of returning x % n, we use the faster mapping function
-// described here: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
-// modified to work with 32 and 64 bits numbers.
-// Note that x should be uniformly distributed over a range [0, 2^p) and shifted left by (UintSize-p) if p < bits.UintSize.
-func reduceRange(x uint, n int) int {
-	h, _ := bits.Mul(x, uint(n))
-	return int(h)
-}
-
-// splitHash returns uint(hash) and hash&7F|setMask. Since reduceRange (the only consumer for H1) does
-// not use a modulo operation, we can safely use the full hash for H1.
-// deprecated
-func splitHas(hash uint64) (h1 uint, h2 uint8) {
-	// uint(hash), uint8(hash)&0x7F | setMask simplifies to:
-	return uint(hash), uint8(hash) | setMask
-}
-
-func h1(hash uint64) uint  { return uint(hash) }
+func h1(hash uint64) uint  { return uint(hash >> 7) }
 func h2(hash uint64) uint8 { return uint8(hash) | setMask }
 
 const (

@@ -26,16 +26,14 @@
 // http://people.csail.mit.edu/shanir/publications/disc2008_submission_98.pdf
 package lru
 
-import "math"
-
 // Map represents a Least Recently Used hash table.
 type Map[K comparable, V any] struct {
-	hash func(K) uint64
-	meta []uint8
-	elms []element[K, V]
-	sizeInfo
-	active  int
-	deleted int
+	hash     func(K) uint64
+	meta     []uint8
+	elms     []element[K, V]
+	capacity int
+	active   int
+	deleted  int
 }
 
 type element[K comparable, V any] struct {
@@ -54,7 +52,7 @@ func NewMap[K comparable, V any](opts ...Option) *Map[K, V] {
 func (m *Map[K, V]) Init(opts ...Option) {
 	o := getOpts[K](opts)
 	m.hash = o.hasher.(func(K) uint64)
-	m.resize(roundSizeUp(o.capacity))
+	m.resize(o.capacity)
 }
 
 // Set sets the value for the given key. It returns the previous value and true
@@ -194,8 +192,8 @@ func (m *Map[K, V]) insert(hash uint64, key K, value V) {
 	var i int
 	{ // manual inline of findFirstNotSet
 		for p := m.probe(hash); ; p = p.next() {
-			if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
-				i = p.index(e.next())
+			if e := newBitset(&m.meta[p.groupIndex()]).matchNotSet(); e != 0 {
+				i = p.elementIndex(e.next())
 				break
 			}
 		}
@@ -220,9 +218,9 @@ func (m *Map[K, V]) find(key K) (uint64, int) {
 	p := m.probe(hash)
 	h2 := h2(hash)
 	for {
-		s := newBitset(&m.meta[p.offset])
+		s := newBitset(&m.meta[p.groupIndex()])
 		for mb := s.matchByte(h2); mb != 0; {
-			i := p.index(mb.next())
+			i := p.elementIndex(mb.next())
 			// mathcByte can yield false positives in rare edge cases, but this is harmless here.
 			if m.elms[i].key == key {
 				return hash, i
@@ -243,7 +241,6 @@ func (m *Map[K, V]) del(i int) {
 	it.key = zeroK
 	it.value = zeroV
 
-	sz := m.capacity
 	m.active--
 	// if there is no probe window around index i that has ever been seen as a full group
 	// then we can mark index i as empty instead of deleted.
@@ -255,7 +252,7 @@ func (m *Map[K, V]) del(i int) {
 	//  - there must be an empty slot both before and after i
 	//  - the sequence of consecitve non empty slots around i must be smaller than groupSize
 	if after := newBitset(&m.meta[i]).matchEmpty(); after != 0 {
-		if before := newBitset(&m.meta[subModulo(i, groupSize, sz)]).matchEmpty(); before != 0 {
+		if before := newBitset(&m.meta[(i-1-groupSize)&(m.capacity-1)+1]).matchEmpty(); before != 0 {
 			if before.firstFromEnd()+after.first() < groupSize {
 				m.setH2(i, empty)
 				return
@@ -267,8 +264,8 @@ func (m *Map[K, V]) del(i int) {
 	m.deleted++
 }
 
-func (m *Map[K, V]) resize(si sizeInfo) {
-	m.sizeInfo = si
+func (m *Map[K, V]) resize(sz int) {
+	m.capacity = sz
 	m.elms = make([]element[K, V], m.capacity+1)
 	m.meta = make([]uint8, m.capacity+1+groupSize-1)
 	m.active = 0
@@ -294,15 +291,15 @@ func (m *Map[K, V]) rehashInPlace() {
 		var target int
 		{ // manual inline of findFirstNotSet
 			for p := m.probe(hash); ; p = p.next() {
-				if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
-					target = p.index(e.next())
+				if e := newBitset(&m.meta[p.groupIndex()]).matchNotSet(); e != 0 {
+					target = p.elementIndex(e.next())
 					break
 				}
 			}
 		}
 		// if i and dest fall within the same group for this hash,
 		// i is already the best position.
-		if p.distance(i)/groupSize == p.distance(target)/groupSize {
+		if p.distToIndex(i)/groupSize == p.distToIndex(target)/groupSize {
 			m.setH2(i, h2(hash))
 			continue
 		}
@@ -373,8 +370,8 @@ func (m *Map[K, V]) swap(i, j int) {
 
 func (m *Map[K, V]) findFirstNotSet(hash uint64) int {
 	for p := m.probe(hash); ; p = p.next() {
-		if e := newBitset(&m.meta[p.offset]).matchNotSet(); e != 0 {
-			return p.index(e.next())
+		if e := newBitset(&m.meta[p.groupIndex()]).matchNotSet(); e != 0 {
+			return p.elementIndex(e.next())
 		}
 	}
 }
@@ -384,9 +381,6 @@ func (m *Map[K, V]) rehashOrGrow() {
 	// we're using the same tuning parameters than abseil-cpp. See
 	// https://github.com/abseil/abseil-cpp/blob/lts_2024_07_22/absl/container/internal/raw_hash_set.cc#L523
 	//
-	// For a Map with fixed element count, the capacity will grow to 1.56 times
-	// the requested initial capacity and ɑ=0.64, which is a decent trade-off
-	// between memory usage and performance.
 	if m.active*32 <= m.capacity*25 {
 		m.rehashInPlace()
 		return
@@ -395,7 +389,7 @@ func (m *Map[K, V]) rehashOrGrow() {
 
 	// we want to keep ɑ >= 1/2 => capacity *= 2ɑ. roundSizeUp will likely
 	// bring it slightly below 1/2, but this is not a major issue.
-	m.resize(roundSizeUp(int(math.Ceil(float64(m.capacity) * 50 / 32))))
+	m.resize(m.capacity << 1)
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hash(it.key), it.key, it.value)
@@ -412,7 +406,7 @@ func (m *Map[K, V]) needRehashOrGrow() bool {
 }
 
 func (m *Map[K, V]) probe(hash uint64) probe {
-	return newProbe(h1(hash), &m.sizeInfo)
+	return newProbe(h1(hash), m.capacity)
 }
 
 func (m *Map[K, V]) updateH2(index int, h2 uint8) {

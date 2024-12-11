@@ -9,14 +9,12 @@ import (
 
 func Test_probe(t *testing.T) {
 	for range 200 {
-		sz := rand.N(1<<10) + minCapacity
-		pi := roundSizeUp(sz)
-		sz = pi.capacity
+		sz := 1 << (rand.N(10) + 5)
 		ctrl := make([]uint8, sz+1)
-		p := newProbe(uint(rand.Uint64()), &pi)
+		p := newProbe(uint(rand.Uint64()), sz)
 		p0 := p
 		for range sz / groupSize {
-			ctrl[p.offset] = 0xff
+			ctrl[p.groupIndex()] = 0xff
 			p0 := p
 			p = p.next()
 			prev := p.prev()
@@ -24,11 +22,9 @@ func Test_probe(t *testing.T) {
 			next := prev.next()
 			require.Equal(t, p, next)
 		}
-		// back to initial pos after sz/groupSize iterations
-		require.Equal(t, p0.offset, p.offset)
 
-		// check ctrl bytes have been all visited
-		for pos, i := p0.offset, 0; i < sz; i++ {
+		// check ctrl bytes have all been visited
+		for pos, i := p0.groupIndex(), 0; i < sz; i++ {
 			if i%groupSize == 0 {
 				require.True(t, ctrl[pos] == 0xff)
 			} else {

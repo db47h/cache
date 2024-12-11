@@ -1,6 +1,10 @@
 package lru
 
-import "github.com/db47h/cache/v2/hash"
+import (
+	"math/bits"
+
+	"github.com/db47h/cache/v2/hash"
+)
 
 const minCapacity = 16
 
@@ -37,6 +41,7 @@ func getOpts[K comparable](opts []Option) options {
 	if o.capacity < minCapacity {
 		o.capacity = minCapacity
 	}
+	o.capacity = 1 << (bits.UintSize - bits.LeadingZeros(uint(o.capacity-1)))
 	if o.hasher == nil {
 		o.hasher = hash.Generic[K]()
 	}
