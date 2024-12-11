@@ -2,6 +2,8 @@ package lru
 
 import "github.com/db47h/cache/v2/hash"
 
+const minCapacity = 16
+
 type Option interface {
 	set(*options)
 }

@@ -379,27 +379,23 @@ func (m *Map[K, V]) findFirstNotSet(hash uint64) int {
 	}
 }
 
-const (
-	minCapacity = 32
-	growthRatio = 1.5
-)
-
 func (m *Map[K, V]) rehashOrGrow() {
-	si := m.sizeInfo
-	// rehash in place if load factor >
-	// 5/8 (0.625) -> m.active > m.dead << 1
-	// 3/4 (0.75)  -> m.active > m.dead << 2
-	// 5/6 (0.833) -> m.active > m.dead << 3
-	// 3/4 is (15/16) / (1 + 1/(1<<2)). Changing the max load factor would affect these values.
-	// With 0.75 and growing the table by a factor of 1.5, the load factor is
-	// kept between 0.5 and 0.935
-	// Benchmarks showed that 0.75 is the best option here.
-	if m.active <= m.deleted<<2 {
+	// for the cutoff point between rehashing in place and growing the table,
+	// we're using the same tuning parameters than abseil-cpp. See
+	// https://github.com/abseil/abseil-cpp/blob/lts_2024_07_22/absl/container/internal/raw_hash_set.cc#L523
+	//
+	// For a Map with fixed element count, the capacity will grow to 1.56 times
+	// the requested initial capacity and ɑ=0.64, which is a decent trade-off
+	// between memory usage and performance.
+	if m.active*32 <= m.capacity*25 {
 		m.rehashInPlace()
 		return
 	}
 	src := m.elms
-	m.resize(roundSizeUp(int(math.Ceil(float64(si.capacity) * growthRatio))))
+
+	// we want to keep ɑ >= 1/2 => capacity *= 2ɑ. roundSizeUp will likely
+	// bring it slightly below 1/2, but this is not a major issue.
+	m.resize(roundSizeUp(int(math.Ceil(float64(m.capacity) * 50 / 32))))
 	for i := src[0].prev; i != 0; {
 		it := &src[i]
 		m.insert(m.hash(it.key), it.key, it.value)
@@ -407,12 +403,12 @@ func (m *Map[K, V]) rehashOrGrow() {
 	}
 }
 
-// needRehashOrGrow returns true if there are less than 1/16 free slots.
+// needRehashOrGrow returns true if there are less than 2/16 free slots.
 func (m *Map[K, V]) needRehashOrGrow() bool {
-	// for minCapatity 32, rhs is 2. This will force a rehash if there is only 1
+	// for minCapatity 16, rhs is 2. This will force a rehash if there is only 1
 	// free slot before insert, thus making sure that there is at least 1 free
 	// slot post insert.
-	return m.capacity-m.active-m.deleted < int(uint(m.capacity)>>4)
+	return m.capacity-m.active-m.deleted < m.capacity>>3
 }
 
 func (m *Map[K, V]) probe(hash uint64) probe {

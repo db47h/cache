@@ -70,9 +70,8 @@ func (p probe) distance(i int) int {
 
 func roundSizeUp(sz int) sizeInfo {
 	// find next size such that sz = ng² * groupSize
-	ng := int(math.Ceil(math.Sqrt(float64(sz / groupSize))))
-	n := ng * groupSize
-	return sizeInfo{capacity: ng * n, n: n}
+	n := int(math.Ceil(math.Sqrt(float64(sz / groupSize))))
+	return sizeInfo{capacity: n * n * groupSize, n: n * groupSize}
 }
 
 // addModulo returns (x + y) % max + 1
